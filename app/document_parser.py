@@ -65,7 +65,7 @@ def parse_document(
             filename=filename,
             data=data,
             ocr_enabled=pdf_ocr_enabled,
-            ocr_languages=pdf_ocr_languages or ["ru", "en"],
+            ocr_languages=pdf_ocr_languages or ["ru", "en", "ch_sim"],
             ocr_model_dir=pdf_ocr_model_dir,
             ocr_min_chars=pdf_ocr_min_chars,
             text_layer_min_chars=pdf_text_layer_min_chars,
@@ -100,6 +100,7 @@ def parse_document(
         metadata["original_chars"] = len(text)
         text = text[:max_chars]
     metadata["chars"] = len(text)
+    metadata.update(_language_metadata(text))
     return ParsedDocument(text=text, metadata=metadata, vision_images=vision_images)
 
 
@@ -182,7 +183,7 @@ def _parse_pdf(
         ocr_text = ""
         ocr_error = ""
         if ocr_enabled:
-            ocr_text, ocr_error = _ocr_image(image_bytes, ocr_languages, ocr_model_dir)
+            ocr_text, ocr_error = _ocr_image(image_bytes, ocr_languages, ocr_model_dir, min_chars=ocr_min_chars)
             ocr_text = _normalize_text(ocr_text)
 
         if len(ocr_text) >= max(1, ocr_min_chars):
@@ -228,6 +229,7 @@ def _parse_pdf(
         "pdf_page_modes": page_modes,
         "ocr_enabled": ocr_enabled,
         "ocr_languages": ocr_languages,
+        "ocr_language_groups": _ocr_language_groups(ocr_languages),
         "text_layer_min_chars": text_layer_min_chars,
         "vision_queued_pages": len(vision_images),
     }
@@ -330,7 +332,28 @@ def _close_fitz_document(document: Any | None) -> None:
 _EASYOCR_READER_CACHE: dict[tuple[tuple[str, ...], str], Any] = {}
 
 
-def _ocr_image(image_bytes: bytes, languages: list[str], model_dir: Path | None) -> tuple[str, str]:
+def _ocr_image(image_bytes: bytes, languages: list[str], model_dir: Path | None, min_chars: int = 1) -> tuple[str, str]:
+    groups = _ocr_language_groups(languages)
+    if not groups:
+        return "", "No OCR languages configured"
+
+    errors: list[str] = []
+    candidates: list[tuple[float, str, list[str]]] = []
+    for group in groups:
+        text, error = _ocr_image_with_group(image_bytes, group, model_dir)
+        normalized_text = _normalize_text(text)
+        if normalized_text:
+            candidates.append((_ocr_quality_score(normalized_text, group, min_chars), normalized_text, group))
+        if error:
+            errors.append(f"{'/'.join(group)}: {error}")
+
+    if candidates:
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return candidates[0][1], "; ".join(errors)
+    return "", "; ".join(errors)
+
+
+def _ocr_image_with_group(image_bytes: bytes, languages: list[str], model_dir: Path | None) -> tuple[str, str]:
     try:
         import numpy as np
         from PIL import Image
@@ -345,6 +368,69 @@ def _ocr_image(image_bytes: bytes, languages: list[str], model_dir: Path | None)
         return str(result), ""
     except Exception as exc:  # noqa: BLE001
         return "", str(exc)
+
+
+def _ocr_language_groups(languages: list[str]) -> list[list[str]]:
+    normalized = []
+    for language in languages:
+        code = _normalize_ocr_language_code(language)
+        if code and code not in normalized:
+            normalized.append(code)
+    if not normalized:
+        normalized = ["ru", "en", "ch_sim"]
+    if "en" not in normalized:
+        normalized.append("en")
+
+    groups: list[list[str]] = []
+    non_chinese = [code for code in normalized if code not in {"ch_sim", "ch_tra"}]
+    if non_chinese:
+        groups.append(_dedupe_languages(non_chinese))
+    for chinese_code in ("ch_sim", "ch_tra"):
+        if chinese_code in normalized:
+            groups.append(_dedupe_languages([chinese_code, "en"]))
+    return groups
+
+
+def _normalize_ocr_language_code(language: str) -> str:
+    code = language.strip().lower().replace("-", "_")
+    aliases = {
+        "eng": "en",
+        "english": "en",
+        "rus": "ru",
+        "russian": "ru",
+        "zh": "ch_sim",
+        "zh_cn": "ch_sim",
+        "cn": "ch_sim",
+        "chinese": "ch_sim",
+        "chinese_simplified": "ch_sim",
+        "zh_tw": "ch_tra",
+        "zh_hk": "ch_tra",
+        "traditional_chinese": "ch_tra",
+    }
+    return aliases.get(code, code)
+
+
+def _dedupe_languages(languages: list[str]) -> list[str]:
+    result: list[str] = []
+    for language in languages:
+        if language not in result:
+            result.append(language)
+    return result
+
+
+def _ocr_quality_score(text: str, languages: list[str], min_chars: int) -> float:
+    counts = _script_counts(text)
+    score = float(len(text))
+    if "ru" in languages:
+        score += counts["cyrillic"] * 2.5
+    if "en" in languages:
+        score += counts["latin"] * 1.3
+    if any(language in {"ch_sim", "ch_tra"} for language in languages):
+        score += counts["han"] * 3.0
+    if len(text) < max(1, min_chars):
+        score *= 0.25
+    unsupported = max(0, counts["letters"] - counts["cyrillic"] - counts["latin"] - counts["han"])
+    return score - unsupported
 
 
 def _image_has_visual_content(image_bytes: bytes) -> bool:
@@ -378,6 +464,62 @@ def _get_easyocr_reader(languages: list[str], model_dir: Path | None) -> Any:
     reader = easyocr.Reader(list(normalized_languages), **kwargs)
     _EASYOCR_READER_CACHE[key] = reader
     return reader
+
+
+def _language_metadata(text: str) -> dict[str, object]:
+    counts = _script_counts(text)
+    detected: list[str] = []
+    if counts["cyrillic"] >= 3:
+        detected.append("ru/cyrillic")
+    if counts["latin"] >= 3:
+        detected.append("en/latin")
+    if counts["han"] >= 2:
+        detected.append("zh/han")
+    for script, label in (
+        ("arabic", "arabic"),
+        ("devanagari", "devanagari"),
+        ("hiragana_katakana", "ja/kana"),
+        ("hangul", "ko/hangul"),
+    ):
+        if counts[script] >= 2:
+            detected.append(label)
+    return {
+        "detected_languages": detected,
+        "script_counts": counts,
+        "multilingual": len(detected) > 1,
+    }
+
+
+def _script_counts(text: str) -> dict[str, int]:
+    counts = {
+        "letters": 0,
+        "latin": 0,
+        "cyrillic": 0,
+        "han": 0,
+        "arabic": 0,
+        "devanagari": 0,
+        "hiragana_katakana": 0,
+        "hangul": 0,
+    }
+    for char in text:
+        code = ord(char)
+        if char.isalpha():
+            counts["letters"] += 1
+        if 0x0041 <= code <= 0x007A or 0x00C0 <= code <= 0x024F:
+            counts["latin"] += 1
+        elif 0x0400 <= code <= 0x052F:
+            counts["cyrillic"] += 1
+        elif 0x3400 <= code <= 0x9FFF or 0xF900 <= code <= 0xFAFF:
+            counts["han"] += 1
+        elif 0x0600 <= code <= 0x06FF:
+            counts["arabic"] += 1
+        elif 0x0900 <= code <= 0x097F:
+            counts["devanagari"] += 1
+        elif 0x3040 <= code <= 0x30FF:
+            counts["hiragana_katakana"] += 1
+        elif 0xAC00 <= code <= 0xD7AF:
+            counts["hangul"] += 1
+    return counts
 
 
 def _cell_to_text(value: object) -> str:
