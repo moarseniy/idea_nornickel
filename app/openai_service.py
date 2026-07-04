@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import json
+import mimetypes
 import re
 from typing import Any
 
@@ -124,6 +126,55 @@ class OpenAIService:
         except Exception as exc:  # noqa: BLE001
             return [], [], {"mode": "failed", "reason": str(exc)}
 
+    def describe_image(self, image_bytes: bytes, filename: str, content_type: str | None = None) -> tuple[str, dict[str, Any]]:
+        if not self.enabled:
+            return "", {"mode": "skipped", "reason": "OPENAI_API_KEY не задан"}
+
+        mime_type = _image_mime_type(filename, content_type)
+        encoded_image = base64.b64encode(image_bytes).decode("ascii")
+        prompt = f"""
+Проанализируй изображение как научно-технический источник для R&D проекта по обогащению и металлургии.
+
+Файл: {filename}
+
+Нужно извлечь максимум полезного текста и предметного смысла для дальнейшей генерации гипотез и графа знаний:
+- тип изображения: схема, регламент, список оборудования, таблица, скриншот или другое;
+- видимые подписи, параметры, численные значения, названия стадий, реагентов, оборудования и потоков;
+- связи между объектами: что подается, куда идет, чем измеряется, что влияет на результат;
+- риски, ограничения, наблюдения и возможные исследовательские зацепки;
+- если часть текста нечитабельна, явно отметь это как неопределенность.
+
+Верни компактный структурированный текст на русском языке без JSON и без markdown-таблиц.
+""".strip()
+        instructions = (
+            "Ты анализируешь промышленные схемы, регламенты и научно-технические изображения. "
+            "Не придумывай невидимые подписи. Если элемент неразборчив, отмечай неопределенность."
+        )
+        input_payload = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": prompt},
+                    {
+                        "type": "input_image",
+                        "image_url": f"data:{mime_type};base64,{encoded_image}",
+                        "detail": self.settings.openai_vision_detail,
+                    },
+                ],
+            }
+        ]
+        try:
+            text = self._call_response_text(
+                instructions=instructions,
+                input_payload=input_payload,
+                max_output_tokens=2200,
+            ).strip()
+            if not text:
+                raise ValueError("OpenAI image analysis returned empty text")
+            return text, {"mode": "openai_vision", "model": self.settings.openai_model, "content_type": mime_type}
+        except Exception as exc:  # noqa: BLE001
+            return "", {"mode": "failed", "model": self.settings.openai_model, "reason": str(exc)}
+
     def chat(
         self,
         project: dict[str, Any],
@@ -167,6 +218,9 @@ class OpenAIService:
             raise OpenAIServiceError(f"OpenAI connectivity check failed ({exc.__class__.__name__}): {exc}") from exc
 
     def _call_text(self, instructions: str, prompt: str, max_output_tokens: int) -> str:
+        return self._call_response_text(instructions=instructions, input_payload=prompt, max_output_tokens=max_output_tokens)
+
+    def _call_response_text(self, instructions: str, input_payload: Any, max_output_tokens: int) -> str:
         from openai import OpenAI
 
         kwargs: dict[str, Any] = {
@@ -177,7 +231,7 @@ class OpenAIService:
         response = client.responses.create(
             model=self.settings.openai_model,
             instructions=instructions,
-            input=prompt,
+            input=input_payload,
             max_output_tokens=max_output_tokens,
         )
         output_text = getattr(response, "output_text", None)
@@ -220,6 +274,14 @@ def _build_hypothesis_prompt(
 
 Сгенерируй {count} гипотез. Каждая гипотеза должна быть проверяемой лабораторно, с механизмом, рисками,
 ожидаемой ценностью и источниками из контекста.
+
+Критически важно для прозрачного ранжирования:
+- novelty, feasibility, impact и risk верни целыми числами от 0 до 100;
+- novelty: 0 = тривиально, 100 = принципиально новое направление;
+- feasibility: 0 = практически нереализуемо, 100 = легко проверить имеющимися средствами;
+- impact: 0 = нет ожидаемого эффекта, 100 = высокий технологический/экономический эффект;
+- risk: 0 = низкий риск, 100 = высокий риск провала, безопасности, CAPEX/OPEX или внедрения;
+- score не возвращай: система пересчитает его сама по указанным весам.
 
 JSON-схема ответа:
 {{
@@ -315,10 +377,14 @@ def _feedback_context(feedback: list[dict[str, Any]]) -> str:
 
 
 def _normalize_hypothesis(item: dict[str, Any], weights: dict[str, float]) -> dict[str, Any]:
-    novelty = _as_float(item.get("novelty"), 50)
-    feasibility = _as_float(item.get("feasibility"), 50)
-    impact = _as_float(item.get("impact"), 50)
-    risk = _as_float(item.get("risk"), 50)
+    scale_factor = _metric_scale_factor(
+        [item.get("novelty"), item.get("feasibility"), item.get("impact"), item.get("risk")]
+    )
+    novelty = _as_score_scale(item.get("novelty"), 50, scale_factor)
+    feasibility = _as_score_scale(item.get("feasibility"), 50, scale_factor)
+    impact = _as_score_scale(item.get("impact"), 50, scale_factor)
+    risk = _as_score_scale(item.get("risk"), 50, scale_factor)
+    score = score_hypothesis(novelty, feasibility, impact, risk, weights)
     return {
         "title": str(item.get("title") or "Гипотеза")[:180],
         "statement": str(item.get("statement") or "")[:1600],
@@ -328,7 +394,7 @@ def _normalize_hypothesis(item: dict[str, Any], weights: dict[str, float]) -> di
         "feasibility": feasibility,
         "impact": impact,
         "risk": risk,
-        "score": _as_float(item.get("score"), score_hypothesis(novelty, feasibility, impact, risk, weights)),
+        "score": score,
         "uncertainty": str(item.get("uncertainty") or "")[:1200],
         "evidence": item.get("evidence") if isinstance(item.get("evidence"), list) else [],
         "roadmap": item.get("roadmap") if isinstance(item.get("roadmap"), list) else [],
@@ -367,8 +433,43 @@ def _response_to_text(response: Any) -> str:
     return str(response)
 
 
+def _metric_scale_factor(values: list[Any]) -> float:
+    numeric_values: list[float] = []
+    for value in values:
+        if value is None or value == "":
+            continue
+        try:
+            numeric_values.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    if numeric_values and all(0 <= value <= 1 for value in numeric_values):
+        return 100.0
+    if numeric_values and all(0 <= value <= 10 for value in numeric_values):
+        return 10.0
+    return 1.0
+
+
+def _as_score_scale(value: Any, default: float, scale_factor: float) -> float:
+    if value is None or value == "":
+        return float(default)
+    try:
+        result = float(value) * scale_factor
+    except (TypeError, ValueError):
+        return float(default)
+    return max(0.0, min(100.0, result))
+
+
 def _as_float(value: Any, default: float) -> float:
     try:
         return max(0.0, min(100.0, float(value)))
     except (TypeError, ValueError):
         return default
+
+
+def _image_mime_type(filename: str, content_type: str | None) -> str:
+    if content_type and content_type.startswith("image/"):
+        return content_type
+    guessed = mimetypes.guess_type(filename)[0]
+    if guessed and guessed.startswith("image/"):
+        return guessed
+    return "image/png"

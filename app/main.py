@@ -31,6 +31,7 @@ from app.schemas import (
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level, logging.INFO),
@@ -57,11 +58,13 @@ def startup() -> None:
     settings.uploads_dir.mkdir(parents=True, exist_ok=True)
     db.initialize()
     logger.info(
-        "Hypothesis Lab started: model=%s base_url=%s openai_key_present=%s graph_extraction=%s storage=%s",
+        "Hypothesis Lab started: model=%s base_url=%s openai_key_present=%s graph_extraction=%s pdf_ocr=%s ocr_langs=%s storage=%s",
         settings.openai_model,
         settings.openai_base_url or "default",
         bool(settings.openai_api_key),
         settings.openai_graph_extraction,
+        settings.pdf_ocr_enabled,
+        ",".join(settings.pdf_ocr_languages),
         settings.storage_dir,
     )
 
@@ -80,6 +83,10 @@ def health() -> dict[str, Any]:
         "openai_model": settings.openai_model,
         "openai_base_url": settings.openai_base_url or "default",
         "graph_extraction": settings.openai_graph_extraction,
+        "pdf_ocr_enabled": settings.pdf_ocr_enabled,
+        "pdf_ocr_languages": settings.pdf_ocr_languages,
+        "pdf_text_layer_min_chars": settings.pdf_text_layer_min_chars,
+        "pdf_vision_max_pages": settings.pdf_vision_max_pages,
     }
 
 
@@ -171,12 +178,15 @@ def import_samples(
     imported: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     actor = _actor(x_user)
+    sample_paths = [
+        path
+        for path in settings.sample_data_dir.rglob("*")
+        if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS and path.suffix.lower() in extensions
+    ]
 
-    for path in sorted(settings.sample_data_dir.rglob("*")):
+    for path in _ordered_sample_paths(sample_paths):
         if len(imported) >= payload.max_files:
             break
-        if not path.is_file() or path.suffix.lower() not in SUPPORTED_EXTENSIONS or path.suffix.lower() not in extensions:
-            continue
         if path.stat().st_size > settings.max_upload_bytes:
             skipped.append({"path": str(path), "reason": "too_large"})
             continue
@@ -351,7 +361,20 @@ def _ingest_document_bytes(
     actor: str,
 ) -> dict[str, Any]:
     display_name = safe_filename(filename)
-    parsed = parse_document(display_name, content_type, data, settings.max_document_chars)
+    parsed = parse_document(
+        display_name,
+        content_type,
+        data,
+        settings.max_document_chars,
+        pdf_ocr_enabled=settings.pdf_ocr_enabled,
+        pdf_ocr_languages=settings.pdf_ocr_languages,
+        pdf_ocr_model_dir=settings.pdf_ocr_model_dir,
+        pdf_ocr_min_chars=settings.pdf_ocr_min_chars,
+        pdf_text_layer_min_chars=settings.pdf_text_layer_min_chars,
+        pdf_render_dpi=settings.pdf_render_dpi,
+        pdf_vision_max_pages=settings.pdf_vision_max_pages,
+    )
+    vision_meta = _enrich_vision_images(parsed)
     upload_dir = settings.uploads_dir / project_id
     upload_dir.mkdir(parents=True, exist_ok=True)
     stored_name = f"{uuid.uuid4().hex}_{display_name}"
@@ -377,7 +400,96 @@ def _ingest_document_bytes(
         "document-ingested",
         source_id=document["id"],
     )
-    return {"document": document, "graph_update": graph_update, "extractor": extractor_meta}
+    return {"document": document, "graph_update": graph_update, "extractor": extractor_meta, "vision": vision_meta}
+
+
+def _enrich_vision_images(parsed: Any) -> dict[str, Any]:
+    if not parsed.vision_images:
+        return {"mode": "not_needed", "count": 0}
+
+    items: list[dict[str, Any]] = []
+    vision_chunks: list[str] = []
+    for image in parsed.vision_images:
+        vision_text, vision_meta = ai.describe_image(image.data, image.label, image.content_type)
+        item_meta = {
+            "label": image.label,
+            "reason": image.reason,
+            "page_no": image.page_no,
+            **vision_meta,
+        }
+        items.append(item_meta)
+        if vision_text:
+            vision_chunks.append(f"[{image.label}]\n{vision_text}")
+            logger.info("Vision extracted text: label=%s chars=%s", image.label, len(vision_text))
+        elif vision_meta.get("mode") == "failed":
+            logger.warning("Vision failed: label=%s reason=%s", image.label, vision_meta.get("reason"))
+
+    vision_summary = {
+        "mode": "processed",
+        "count": len(parsed.vision_images),
+        "text_items": len(vision_chunks),
+        "items": items,
+    }
+    parsed.metadata["vision"] = vision_summary
+    if vision_chunks:
+        separator = "\n\n" if parsed.text else ""
+        combined = f"{parsed.text}{separator}Vision-анализ OpenAI:\n" + "\n\n".join(vision_chunks)
+        if len(combined) > settings.max_document_chars:
+            parsed.metadata["truncated"] = True
+            parsed.metadata["original_chars"] = len(combined)
+            combined = combined[: settings.max_document_chars]
+        parsed.text = combined
+        parsed.metadata["chars"] = len(parsed.text)
+    return vision_summary
+
+
+def _ordered_sample_paths(paths: list[Path]) -> list[Path]:
+    buckets: dict[str, list[Path]] = {
+        "regulation_images": [],
+        "scheme_images": [],
+        "core_documents": [],
+        "technical_pdfs": [],
+        "other": [],
+    }
+    for path in paths:
+        buckets[_sample_bucket(path)].append(path)
+
+    for bucket_paths in buckets.values():
+        bucket_paths.sort(key=_sample_path_key)
+
+    ordered: list[Path] = []
+    cycle = ("regulation_images", "scheme_images", "core_documents", "regulation_images", "scheme_images", "core_documents", "technical_pdfs")
+    while any(buckets.values()):
+        before = len(ordered)
+        for bucket in cycle:
+            if buckets[bucket]:
+                ordered.append(buckets[bucket].pop(0))
+        if len(ordered) == before:
+            ordered.extend(buckets["other"])
+            buckets["other"] = []
+    return ordered
+
+
+def _sample_bucket(path: Path) -> str:
+    path_key = _sample_path_key(path)
+    extension = path.suffix.lower()
+    if extension in IMAGE_EXTENSIONS and "регламенты/" in path_key:
+        return "regulation_images"
+    if extension in IMAGE_EXTENSIONS and "схемы флотации/" in path_key:
+        return "scheme_images"
+    if extension in {".docx", ".xlsx", ".xlsm", ".txt", ".md", ".csv"}:
+        return "core_documents"
+    if extension == ".pdf" and "дополнительные материалы/" not in path_key:
+        return "technical_pdfs"
+    return "other"
+
+
+def _sample_path_key(path: Path) -> str:
+    try:
+        relative = path.relative_to(settings.sample_data_dir)
+    except ValueError:
+        relative = path
+    return "/".join(part.casefold() for part in relative.parts)
 
 
 def _require_project(project_id: str) -> dict[str, Any]:

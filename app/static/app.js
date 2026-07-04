@@ -190,7 +190,7 @@ async function importSamples() {
   try {
     const payload = await api(`/api/projects/${state.projectId}/documents/import-samples`, {
       method: "POST",
-      json: { max_files: 6, extensions: [".docx", ".xlsx", ".pdf"] },
+      json: { max_files: 12, extensions: [".png", ".jpg", ".jpeg", ".docx", ".xlsx", ".pdf"] },
     });
     await loadState();
     toast(`Импортировано: ${payload.imported.length}`);

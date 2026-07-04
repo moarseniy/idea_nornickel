@@ -44,6 +44,14 @@ class Settings:
     max_document_chars: int
     max_context_chars: int
     max_upload_bytes: int
+    pdf_ocr_enabled: bool
+    pdf_ocr_languages: list[str]
+    pdf_ocr_model_dir: Path
+    pdf_ocr_min_chars: int
+    pdf_text_layer_min_chars: int
+    pdf_render_dpi: int
+    pdf_vision_max_pages: int
+    openai_vision_detail: str
 
     @property
     def openai_enabled(self) -> bool:
@@ -55,6 +63,11 @@ def load_settings() -> Settings:
     db_path = Path(os.getenv("DATABASE_PATH", str(storage_dir / "hypothesis_lab.db"))).resolve()
     uploads_dir = Path(os.getenv("UPLOADS_DIR", str(storage_dir / "uploads"))).resolve()
     sample_data_dir = Path(os.getenv("SAMPLE_DATA_DIR", "data")).resolve()
+    pdf_ocr_model_dir = Path(os.getenv("PDF_OCR_MODEL_DIR", str(storage_dir / "easyocr"))).resolve()
+    pdf_ocr_languages = [item.strip() for item in os.getenv("PDF_OCR_LANGUAGES", "ru,en").split(",") if item.strip()]
+    openai_vision_detail = os.getenv("OPENAI_VISION_DETAIL", "high").strip().lower() or "high"
+    if openai_vision_detail not in {"low", "high", "auto"}:
+        openai_vision_detail = "high"
     return Settings(
         app_name=os.getenv("APP_NAME", "Hypothesis Lab"),
         storage_dir=storage_dir,
@@ -69,6 +82,14 @@ def load_settings() -> Settings:
         max_document_chars=_as_int(os.getenv("MAX_DOCUMENT_CHARS"), 120_000),
         max_context_chars=_as_int(os.getenv("MAX_CONTEXT_CHARS"), 28_000),
         max_upload_bytes=_as_int(os.getenv("MAX_UPLOAD_BYTES"), 35 * 1024 * 1024),
+        pdf_ocr_enabled=_as_bool(os.getenv("PDF_OCR_ENABLED"), True),
+        pdf_ocr_languages=pdf_ocr_languages or ["ru", "en"],
+        pdf_ocr_model_dir=pdf_ocr_model_dir,
+        pdf_ocr_min_chars=_as_int(os.getenv("PDF_OCR_MIN_CHARS"), 12),
+        pdf_text_layer_min_chars=_as_int(os.getenv("PDF_TEXT_LAYER_MIN_CHARS"), 16),
+        pdf_render_dpi=_as_int(os.getenv("PDF_RENDER_DPI"), 160),
+        pdf_vision_max_pages=_as_int(os.getenv("PDF_VISION_MAX_PAGES"), 8),
+        openai_vision_detail=openai_vision_detail,
     )
 
 

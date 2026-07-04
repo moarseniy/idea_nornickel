@@ -3,8 +3,10 @@ from __future__ import annotations
 import csv
 import io
 import re
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".csv", ".pdf", ".docx", ".xlsx", ".xlsm", ".png", ".jpg", ".jpeg"}
@@ -14,6 +16,16 @@ SUPPORTED_EXTENSIONS = {".txt", ".md", ".csv", ".pdf", ".docx", ".xlsx", ".xlsm"
 class ParsedDocument:
     text: str
     metadata: dict[str, object] = field(default_factory=dict)
+    vision_images: list["VisionImage"] = field(default_factory=list)
+
+
+@dataclass
+class VisionImage:
+    label: str
+    data: bytes
+    content_type: str = "image/png"
+    reason: str = "image"
+    page_no: int | None = None
 
 
 def safe_filename(filename: str) -> str:
@@ -21,7 +33,20 @@ def safe_filename(filename: str) -> str:
     return re.sub(r"[^A-Za-zА-Яа-я0-9._ -]+", "_", stem)[:180]
 
 
-def parse_document(filename: str, content_type: str | None, data: bytes, max_chars: int) -> ParsedDocument:
+def parse_document(
+    filename: str,
+    content_type: str | None,
+    data: bytes,
+    max_chars: int,
+    *,
+    pdf_ocr_enabled: bool = True,
+    pdf_ocr_languages: list[str] | None = None,
+    pdf_ocr_model_dir: Path | None = None,
+    pdf_ocr_min_chars: int = 12,
+    pdf_text_layer_min_chars: int = 16,
+    pdf_render_dpi: int = 160,
+    pdf_vision_max_pages: int = 8,
+) -> ParsedDocument:
     extension = Path(filename).suffix.lower()
     metadata: dict[str, object] = {
         "filename": filename,
@@ -29,13 +54,24 @@ def parse_document(filename: str, content_type: str | None, data: bytes, max_cha
         "extension": extension,
         "bytes": len(data),
     }
+    vision_images: list[VisionImage] = []
 
     if extension in {".txt", ".md"}:
         text = _decode_text(data)
     elif extension == ".csv":
         text = _parse_csv(data)
     elif extension == ".pdf":
-        text, pdf_meta = _parse_pdf(data)
+        text, pdf_meta, vision_images = _parse_pdf(
+            filename=filename,
+            data=data,
+            ocr_enabled=pdf_ocr_enabled,
+            ocr_languages=pdf_ocr_languages or ["ru", "en"],
+            ocr_model_dir=pdf_ocr_model_dir,
+            ocr_min_chars=pdf_ocr_min_chars,
+            text_layer_min_chars=pdf_text_layer_min_chars,
+            render_dpi=pdf_render_dpi,
+            vision_max_pages=pdf_vision_max_pages,
+        )
         metadata.update(pdf_meta)
     elif extension == ".docx":
         text, doc_meta = _parse_docx(data)
@@ -44,8 +80,16 @@ def parse_document(filename: str, content_type: str | None, data: bytes, max_cha
         text, xlsx_meta = _parse_xlsx(data)
         metadata.update(xlsx_meta)
     elif extension in {".png", ".jpg", ".jpeg"}:
-        text = f"Изображение или схема: {filename}. OCR в MVP не выполняется, источник сохранен как визуальное вложение."
+        text = f"Изображение или схема: {filename}. Текстовое содержание будет дополнено vision-анализом при наличии OpenAI API."
         metadata["image_only"] = True
+        vision_images.append(
+            VisionImage(
+                label=filename,
+                data=data,
+                content_type=content_type if content_type and content_type.startswith("image/") else _image_content_type(filename),
+                reason="standalone_image",
+            )
+        )
     else:
         text = _decode_text(data)
         metadata["warning"] = "Формат не распознан, выполнена попытка текстового декодирования."
@@ -56,7 +100,7 @@ def parse_document(filename: str, content_type: str | None, data: bytes, max_cha
         metadata["original_chars"] = len(text)
         text = text[:max_chars]
     metadata["chars"] = len(text)
-    return ParsedDocument(text=text, metadata=metadata)
+    return ParsedDocument(text=text, metadata=metadata, vision_images=vision_images)
 
 
 def _decode_text(data: bytes) -> str:
@@ -84,17 +128,110 @@ def _parse_csv(data: bytes) -> str:
     return "\n".join(rows)
 
 
-def _parse_pdf(data: bytes) -> tuple[str, dict[str, object]]:
+def _parse_pdf(
+    filename: str,
+    data: bytes,
+    ocr_enabled: bool,
+    ocr_languages: list[str],
+    ocr_model_dir: Path | None,
+    ocr_min_chars: int,
+    text_layer_min_chars: int,
+    render_dpi: int,
+    vision_max_pages: int,
+) -> tuple[str, dict[str, object], list[VisionImage]]:
     from pypdf import PdfReader
 
     reader = PdfReader(io.BytesIO(data))
-    pages = []
-    for page_no, page in enumerate(reader.pages[:80], start=1):
-        page_text = page.extract_text() or ""
-        if page_text.strip():
-            pages.append(f"[стр. {page_no}]\n{page_text}")
-    meta = {"pages": len(reader.pages), "parsed_pages": min(len(reader.pages), 80)}
-    return "\n\n".join(pages), meta
+    fitz_document: Any | None = None
+    chunks: list[str] = []
+    vision_images: list[VisionImage] = []
+    page_modes: list[dict[str, object]] = []
+    counters = {"text_layer": 0, "ocr": 0, "vision": 0, "blank": 0, "failed": 0}
+    parsed_pages = min(len(reader.pages), 80)
+
+    for page_index, page in enumerate(reader.pages[:parsed_pages]):
+        page_no = page_index + 1
+        page_text = _normalize_text(page.extract_text() or "")
+        has_images = _pdf_page_has_images(page)
+        if page_text and (len(page_text) >= max(1, text_layer_min_chars) or not has_images):
+            chunks.append(f"[стр. {page_no} | text-layer]\n{page_text}")
+            counters["text_layer"] += 1
+            page_modes.append({"page": page_no, "mode": "text_layer", "chars": len(page_text)})
+            continue
+
+        rendered_page, render_error = _render_pdf_page(data, page_index, render_dpi, fitz_document)
+        if rendered_page is None:
+            if page_text:
+                chunks.append(f"[стр. {page_no} | short text-layer]\n{page_text}")
+                counters["text_layer"] += 1
+                page_modes.append(
+                    {
+                        "page": page_no,
+                        "mode": "short_text_layer",
+                        "chars": len(page_text),
+                        "render_error": render_error or "unknown",
+                    }
+                )
+            else:
+                counters["failed"] += 1
+                page_modes.append({"page": page_no, "mode": "render_failed", "reason": render_error or "unknown"})
+            continue
+        fitz_document = rendered_page[1]
+        image_bytes = rendered_page[0]
+
+        ocr_text = ""
+        ocr_error = ""
+        if ocr_enabled:
+            ocr_text, ocr_error = _ocr_image(image_bytes, ocr_languages, ocr_model_dir)
+            ocr_text = _normalize_text(ocr_text)
+
+        if len(ocr_text) >= max(1, ocr_min_chars):
+            chunks.append(f"[стр. {page_no} | OCR]\n{ocr_text}")
+            counters["ocr"] += 1
+            page_modes.append({"page": page_no, "mode": "ocr", "chars": len(ocr_text)})
+            continue
+
+        if not _image_has_visual_content(image_bytes):
+            counters["blank"] += 1
+            page_modes.append({"page": page_no, "mode": "blank_render", "ocr_chars": len(ocr_text)})
+            continue
+
+        if len(vision_images) < max(0, vision_max_pages):
+            vision_images.append(
+                VisionImage(
+                    label=f"{filename} | стр. {page_no}",
+                    data=image_bytes,
+                    reason="pdf_image_page_without_ocr_text",
+                    page_no=page_no,
+                )
+            )
+            counters["vision"] += 1
+            mode: dict[str, object] = {
+                "page": page_no,
+                "mode": "vision_queued",
+                "ocr_chars": len(ocr_text),
+                "text_layer_chars": len(page_text),
+                "has_pdf_images": has_images,
+            }
+            if ocr_error:
+                mode["ocr_error"] = ocr_error
+            page_modes.append(mode)
+        else:
+            counters["blank"] += 1
+            page_modes.append({"page": page_no, "mode": "vision_skipped_limit", "ocr_chars": len(ocr_text)})
+
+    _close_fitz_document(fitz_document)
+    meta = {
+        "pages": len(reader.pages),
+        "parsed_pages": parsed_pages,
+        "pdf_parse": counters,
+        "pdf_page_modes": page_modes,
+        "ocr_enabled": ocr_enabled,
+        "ocr_languages": ocr_languages,
+        "text_layer_min_chars": text_layer_min_chars,
+        "vision_queued_pages": len(vision_images),
+    }
+    return "\n\n".join(chunks), meta, vision_images
 
 
 def _parse_docx(data: bytes) -> tuple[str, dict[str, object]]:
@@ -135,6 +272,114 @@ def _parse_xlsx(data: bytes) -> tuple[str, dict[str, object]]:
     return "\n".join(chunks), {"sheets": sheet_names, "parsed_sheets": min(len(sheet_names), 12)}
 
 
+def _pdf_page_has_images(page: Any) -> bool:
+    try:
+        if getattr(page, "images", None):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        resources = _resolve_pdf_object(page.get("/Resources") or {})
+        xobjects = _resolve_pdf_object(resources.get("/XObject") or {})
+        if not hasattr(xobjects, "values"):
+            return False
+        for raw_xobject in xobjects.values():
+            xobject = _resolve_pdf_object(raw_xobject)
+            if xobject.get("/Subtype") == "/Image":
+                return True
+    except Exception:  # noqa: BLE001
+        return False
+    return False
+
+
+def _resolve_pdf_object(value: Any) -> Any:
+    if hasattr(value, "get_object"):
+        return value.get_object()
+    return value
+
+
+def _render_pdf_page(
+    data: bytes,
+    page_index: int,
+    dpi: int,
+    document: Any | None,
+) -> tuple[tuple[bytes, Any] | None, str]:
+    try:
+        import fitz
+
+        if document is None:
+            document = fitz.open(stream=data, filetype="pdf")
+        page = document.load_page(page_index)
+        scale = max(72, dpi) / 72
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+        return (pixmap.tobytes("png"), document), ""
+    except Exception as exc:  # noqa: BLE001
+        return None, str(exc)
+
+
+def _close_fitz_document(document: Any | None) -> None:
+    if document is None:
+        return
+    try:
+        document.close()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+_EASYOCR_READER_CACHE: dict[tuple[tuple[str, ...], str], Any] = {}
+
+
+def _ocr_image(image_bytes: bytes, languages: list[str], model_dir: Path | None) -> tuple[str, str]:
+    try:
+        import numpy as np
+        from PIL import Image
+
+        reader = _get_easyocr_reader(languages, model_dir)
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="'pin_memory' argument is set as true.*", category=UserWarning)
+            result = reader.readtext(np.array(image), detail=0, paragraph=True)
+        if isinstance(result, list):
+            return "\n".join(str(item) for item in result if str(item).strip()), ""
+        return str(result), ""
+    except Exception as exc:  # noqa: BLE001
+        return "", str(exc)
+
+
+def _image_has_visual_content(image_bytes: bytes) -> bool:
+    try:
+        from PIL import Image, ImageStat
+
+        image = Image.open(io.BytesIO(image_bytes)).convert("L")
+        image.thumbnail((96, 96))
+        stat = ImageStat.Stat(image)
+        mean = stat.mean[0]
+        stddev = stat.stddev[0]
+        return mean < 248 or stddev > 3
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _get_easyocr_reader(languages: list[str], model_dir: Path | None) -> Any:
+    import easyocr
+
+    normalized_languages = tuple(languages or ["ru", "en"])
+    model_path = str(model_dir or "")
+    key = (normalized_languages, model_path)
+    reader = _EASYOCR_READER_CACHE.get(key)
+    if reader is not None:
+        return reader
+    if model_dir is not None:
+        model_dir.mkdir(parents=True, exist_ok=True)
+    kwargs: dict[str, object] = {"gpu": False, "verbose": False}
+    if model_path:
+        kwargs["model_storage_directory"] = model_path
+    reader = easyocr.Reader(list(normalized_languages), **kwargs)
+    _EASYOCR_READER_CACHE[key] = reader
+    return reader
+
+
 def _cell_to_text(value: object) -> str:
     if value is None:
         return ""
@@ -148,3 +393,9 @@ def _normalize_text(text: str) -> str:
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
+
+def _image_content_type(filename: str) -> str:
+    extension = Path(filename).suffix.lower()
+    if extension in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    return "image/png"
