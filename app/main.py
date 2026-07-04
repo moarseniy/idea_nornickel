@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import html
 import io
 import logging
 import mimetypes
@@ -137,6 +138,13 @@ def update_project(
     _require_project(project_id)
     project = db.update_project(project_id, payload.model_dump(exclude_unset=True), _actor(x_user))
     return {"project": project}
+
+
+@app.delete("/api/projects/{project_id}")
+def delete_project(project_id: str) -> dict[str, Any]:
+    if not db.delete_project(project_id):
+        raise HTTPException(status_code=404, detail="Проект не найден")
+    return {"deleted": True}
 
 
 @app.get("/api/projects/{project_id}/state")
@@ -443,6 +451,10 @@ def export_csv(project_id: str) -> Response:
             "economics",
             "created_at",
         ],
+        delimiter=";",
+        quoting=csv.QUOTE_ALL,
+        lineterminator="\n",
+        extrasaction="ignore",
     )
     writer.writeheader()
     for item in hypotheses:
@@ -460,7 +472,7 @@ def export_csv(project_id: str) -> Response:
             }
         )
     return Response(
-        content=buffer.getvalue(),
+        content="\ufeff" + buffer.getvalue(),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="hypotheses.csv"'},
     )
@@ -573,91 +585,86 @@ def _render_pdf_export(data: dict[str, Any]) -> bytes:
     documents = data.get("documents") or []
     weights = _export_weights(project)
     doc = fitz.open()
-    page = doc.new_page(width=595, height=842)
-    y = 42
 
-    def add_page() -> None:
-        nonlocal page, y
+    def add_html_page(title: str, body: str, *, subtitle: str = "") -> None:
         page = doc.new_page(width=595, height=842)
-        y = 42
+        page.draw_rect(fitz.Rect(0, 0, 595, 842), color=(0.98, 0.96, 0.92), fill=(0.98, 0.96, 0.92))
+        content = f"""
+        <style>
+          body {{ font-family: sans-serif; color: #2d2922; font-size: 10.5pt; line-height: 1.35; }}
+          h1 {{ margin: 0 0 8pt; font-size: 19pt; color: #15130f; }}
+          h2 {{ margin: 0 0 8pt; font-size: 14pt; color: #15130f; }}
+          h3 {{ margin: 13pt 0 5pt; font-size: 10.5pt; color: #735121; }}
+          p {{ margin: 0 0 8pt; }}
+          ul, ol {{ margin: 2pt 0 8pt 18pt; padding: 0; }}
+          li {{ margin: 0 0 4pt; }}
+          .hero {{ background: #e09830; border-radius: 6pt; padding: 16pt; margin-bottom: 14pt; }}
+          .hero h1, .hero p {{ color: #15130f; }}
+          .muted {{ color: #766d5e; }}
+          .metrics {{ display: flex; gap: 6pt; margin: 8pt 0 12pt; }}
+          .metric {{ border: 1px solid #d8cbb5; border-radius: 5pt; padding: 5pt 7pt; background: #fffdf7; }}
+          .metric b {{ display: block; font-size: 13pt; color: #15130f; }}
+          .score {{ float: right; font-size: 23pt; font-weight: 700; color: #e09830; }}
+          .section {{ border-top: 1px solid #ded3c1; padding-top: 8pt; margin-top: 9pt; }}
+          a {{ color: #7b4b12; }}
+        </style>
+        <body>
+          <div class="hero">
+            <h1>{_html_escape(title)}</h1>
+            <p>{_html_escape(subtitle)}</p>
+          </div>
+          {body}
+        </body>
+        """
+        page.insert_htmlbox(fitz.Rect(42, 38, 553, 806), content)
 
-    def text_block(text: str, rect_height: float, *, size: float = 10.5, color: tuple[float, float, float] = (0.12, 0.12, 0.12)) -> None:
-        nonlocal y
-        if y + rect_height > 800:
-            add_page()
-        page.insert_textbox(
-            fitz.Rect(42, y, 553, y + rect_height),
-            str(text or ""),
-            fontsize=size,
-            fontname="helv",
-            color=color,
-            align=fitz.TEXT_ALIGN_LEFT,
+    ranking_items = []
+    for index, item in enumerate(hypotheses, start=1):
+        values = _export_hypothesis_values(item, weights)
+        ranking_items.append(
+            f"<li><b>{index}. {_html_escape(item.get('title') or 'Гипотеза')}</b> "
+            f"<span class='muted'>score {values['score']:.1f}; "
+            f"новизна {values['novelty']:.0f}; реализуемость {values['feasibility']:.0f}; "
+            f"эффект {values['impact']:.0f}; риск {values['risk']:.0f}</span></li>"
         )
-        y += rect_height + 6
-
-    page.draw_rect(fitz.Rect(0, 0, 595, 842), color=(0.98, 0.96, 0.92), fill=(0.98, 0.96, 0.92))
-    page.draw_rect(fitz.Rect(32, 32, 563, 116), color=(0.88, 0.58, 0.18), fill=(0.88, 0.58, 0.18))
-    page.insert_textbox(
-        fitz.Rect(48, 48, 547, 76),
-        project.get("name") or "Hypothesis Lab",
-        fontsize=18,
-        fontname="helv",
-        color=(0.05, 0.05, 0.04),
+    add_html_page(
+        str(project.get("name") or "IDEA"),
+        "\n".join(
+            [
+                f"<p><b>Домен:</b> {_html_escape(project.get('domain') or '-')}</p>",
+                f"<p><b>Цель / KPI:</b> {_html_escape(project.get('goal') or '-')}</p>",
+                f"<p><b>Ограничения:</b> {_html_escape(project.get('constraints') or '-')}</p>",
+                "<h3>Ранжирование</h3>",
+                f"<ol>{''.join(ranking_items) if ranking_items else '<li>Гипотез пока нет</li>'}</ol>",
+            ]
+        ),
+        subtitle=f"{len(documents)} источников · {len(hypotheses)} гипотез",
     )
-    page.insert_textbox(
-        fitz.Rect(48, 78, 547, 104),
-        f"{len(documents)} источников · {len(hypotheses)} гипотез",
-        fontsize=10,
-        fontname="helv",
-        color=(0.14, 0.12, 0.09),
-    )
-    y = 134
-    text_block(f"Домен: {project.get('domain') or '-'}", 22, size=10.5)
-    text_block(f"Цель / KPI: {project.get('goal') or '-'}", 44, size=10.5)
 
     for index, item in enumerate(hypotheses, start=1):
         values = _export_hypothesis_values(item, weights)
-        if y + 164 > 800:
-            add_page()
-        page.draw_rect(fitz.Rect(36, y, 559, y + 154), color=(0.86, 0.82, 0.73), fill=(1, 0.99, 0.96), width=0.6)
-        page.draw_rect(fitz.Rect(36, y, 41, y + 154), color=(0.88, 0.58, 0.18), fill=(0.88, 0.58, 0.18))
-        page.insert_textbox(
-            fitz.Rect(52, y + 12, 455, y + 42),
-            f"{index}. {item.get('title') or 'Гипотеза'}",
-            fontsize=12.5,
-            fontname="helv",
-            color=(0.08, 0.08, 0.07),
+        metrics = f"""
+        <div class="metrics">
+          <div class="metric"><span>Score</span><b>{values['score']:.1f}</b></div>
+          <div class="metric"><span>Новизна</span><b>{values['novelty']:.0f}</b></div>
+          <div class="metric"><span>Реализуемость</span><b>{values['feasibility']:.0f}</b></div>
+          <div class="metric"><span>Эффект</span><b>{values['impact']:.0f}</b></div>
+          <div class="metric"><span>Риск</span><b>{values['risk']:.0f}</b></div>
+        </div>
+        """
+        body = "\n".join(
+            [
+                metrics,
+                f"<p><b>Статус:</b> {_html_escape(item.get('status') or '-')}</p>",
+                f"<div class='section'><h3>Проверяемое утверждение</h3><p>{_html_escape(_clip_text(item.get('statement'), 1400))}</p></div>",
+                f"<div class='section'><h3>Обоснование</h3><p>{_html_escape(_clip_text(item.get('rationale'), 1800))}</p></div>",
+                f"<div class='section'><h3>Механизм</h3><p>{_html_escape(_clip_text(item.get('mechanism'), 1400))}</p></div>",
+                f"<div class='section'><h3>План внедрения / проверки</h3>{_pdf_roadmap_html(item.get('roadmap'))}</div>",
+                f"<div class='section'><h3>Экономический контур</h3>{_pdf_economics_html(item.get('economics'))}</div>",
+                f"<div class='section'><h3>Источники</h3>{_pdf_evidence_html(item.get('evidence'))}</div>",
+            ]
         )
-        page.insert_textbox(
-            fitz.Rect(470, y + 12, 545, y + 42),
-            f"{values['score']:.1f}",
-            fontsize=18,
-            fontname="helv",
-            color=(0.88, 0.58, 0.18),
-            align=fitz.TEXT_ALIGN_RIGHT,
-        )
-        page.insert_textbox(
-            fitz.Rect(52, y + 45, 545, y + 104),
-            _pdf_hypothesis_text(item),
-            fontsize=9.5,
-            fontname="helv",
-            color=(0.18, 0.17, 0.15),
-        )
-        metrics = (
-            f"status: {item.get('status') or '-'}   "
-            f"novelty {values['novelty']:.0f} · "
-            f"feasibility {values['feasibility']:.0f} · "
-            f"impact {values['impact']:.0f} · "
-            f"risk {values['risk']:.0f}"
-        )
-        page.insert_textbox(
-            fitz.Rect(52, y + 122, 545, y + 144),
-            metrics,
-            fontsize=8.5,
-            fontname="helv",
-            color=(0.38, 0.35, 0.29),
-        )
-        y += 168
+        add_html_page(f"{index}. {item.get('title') or 'Гипотеза'}", body, subtitle="Структурированный отчет по гипотезе")
 
     payload = doc.tobytes(garbage=4, deflate=True)
     doc.close()
@@ -727,6 +734,68 @@ def _economics_line(item: dict[str, Any]) -> str:
     if confidence:
         parts.append(f"confidence={confidence}")
     return " | ".join(part for part in parts if part)
+
+
+def _html_escape(value: Any) -> str:
+    return html.escape(str(value or ""), quote=True).replace("\n", "<br>")
+
+
+def _clip_text(value: Any, limit: int) -> str:
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _pdf_roadmap_html(roadmap: Any) -> str:
+    if not isinstance(roadmap, list) or not roadmap:
+        return "<p class='muted'>План не сформирован.</p>"
+    items = []
+    for index, step in enumerate(roadmap[:6], start=1):
+        if not isinstance(step, dict):
+            continue
+        number = step.get("step") or index
+        title = _html_escape(step.get("title") or "Шаг")
+        output = _html_escape(_clip_text(step.get("output"), 420))
+        owner = _html_escape(step.get("owner") or "")
+        suffix = f" <span class='muted'>({owner})</span>" if owner else ""
+        items.append(f"<li><b>{number}. {title}</b>{suffix}<br>{output}</li>")
+    return f"<ol>{''.join(items)}</ol>" if items else "<p class='muted'>План не сформирован.</p>"
+
+
+def _pdf_economics_html(economics: Any) -> str:
+    if not isinstance(economics, list) or not economics:
+        return "<p class='muted'>Экономический контур не сформирован.</p>"
+    items = []
+    for economic in economics[:5]:
+        if not isinstance(economic, dict):
+            continue
+        title = _html_escape(economic.get("item") or "Оценка")
+        details = [
+            ("Допущение", economic.get("assumption")),
+            ("Расчет", economic.get("calculation")),
+            ("Эффект", economic.get("expected_effect")),
+            ("Данные", economic.get("data_needed")),
+            ("Доверие", economic.get("confidence")),
+        ]
+        text = "; ".join(f"{label}: {_clip_text(value, 320)}" for label, value in details if str(value or "").strip())
+        items.append(f"<li><b>{title}</b><br>{_html_escape(text)}</li>")
+    return f"<ul>{''.join(items)}</ul>" if items else "<p class='muted'>Экономический контур не сформирован.</p>"
+
+
+def _pdf_evidence_html(evidence: Any) -> str:
+    if not isinstance(evidence, list) or not evidence:
+        return "<p class='muted'>Источники не указаны.</p>"
+    items = []
+    for item in evidence[:6]:
+        if not isinstance(item, dict):
+            continue
+        source = _html_escape(item.get("source") or "source")
+        quote = _html_escape(_clip_text(item.get("quote") or item.get("why"), 420))
+        why = _html_escape(_clip_text(item.get("why"), 420))
+        url = _html_escape(item.get("url") or "")
+        link = f"<br><a href='{url}'>{url}</a>" if url else ""
+        context = f"<br><span class='muted'>{why}</span>" if why and why != quote else ""
+        items.append(f"<li><b>{source}</b><br>{quote}{context}{link}</li>")
+    return f"<ul>{''.join(items)}</ul>" if items else "<p class='muted'>Источники не указаны.</p>"
 
 
 def _pdf_hypothesis_text(item: dict[str, Any]) -> str:

@@ -79,7 +79,10 @@
                   <span>Ограничения</span>
                   <textarea id="projectConstraints" name="constraints" rows="3"></textarea>
                 </label>
-                <button class="secondary" type="submit"><span>✓</span><b>Сохранить проект</b></button>
+                <div class="project-form-actions">
+                  <button class="secondary" type="submit"><span>✓</span><b>Обновить проект</b></button>
+                  <button id="deleteProjectBtn" class="secondary danger" type="button"><span>×</span><b>Удалить проект</b></button>
+                </div>
               </form>
             </div>
 
@@ -212,7 +215,7 @@
     </div>
 
     <div id="toast" class="toast" hidden></div>
-    <script src="/static/graph-engine.js?v=20260704-web-search-default"></script>
-    <script src="/static/app.js?v=20260704-web-search-default"></script>
+    <script src="/static/graph-engine.js?v=20260704-project-update-label"></script>
+    <script src="/static/app.js?v=20260704-project-update-label"></script>
   </body>
 </html>

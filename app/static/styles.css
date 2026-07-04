@@ -536,6 +536,12 @@ button {
   border-color: rgba(224, 152, 48, 0.38);
 }
 
+.secondary.danger:hover {
+  color: var(--red);
+  border-color: rgba(194, 117, 102, 0.42);
+  background: rgba(194, 117, 102, 0.08);
+}
+
 .reaction-row {
   gap: 6px;
 }
@@ -617,6 +623,12 @@ button {
   gap: 10px;
   padding: 12px 16px;
   border-bottom: 1px solid var(--line);
+}
+
+.project-form-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .settings-tabs {
@@ -1172,6 +1184,7 @@ knowledge-graph {
   }
 
   .head-actions,
+  .project-form-actions,
   .source-actions,
   .export-actions,
   .settings-tabs,

@@ -208,6 +208,11 @@ class Database:
             self._add_event_conn(conn, project_id, actor, "project.updated", "project", project_id, payload)
         return self.get_project(project_id)
 
+    def delete_project(self, project_id: str) -> bool:
+        with self.connect() as conn:
+            cursor = conn.execute("DELETE FROM projects WHERE id=?", (project_id,))
+        return cursor.rowcount > 0
+
     def list_projects(self) -> list[dict[str, Any]]:
         with self.connect() as conn:
             rows = conn.execute(
@@ -543,7 +548,7 @@ class Database:
         with self.connect() as conn:
             row = conn.execute(
                 """
-                SELECT f.*, h.title AS hypothesis_title
+                SELECT f.*, f.rowid AS feedback_rowid, h.title AS hypothesis_title
                 FROM feedback f
                 LEFT JOIN hypotheses h ON h.id = f.hypothesis_id
                 WHERE f.id=?
@@ -556,11 +561,11 @@ class Database:
         with self.connect() as conn:
             rows = conn.execute(
                 """
-                SELECT f.*, h.title AS hypothesis_title
+                SELECT f.*, f.rowid AS feedback_rowid, h.title AS hypothesis_title
                 FROM feedback f
                 LEFT JOIN hypotheses h ON h.id = f.hypothesis_id
                 WHERE f.project_id=?
-                ORDER BY f.created_at DESC
+                ORDER BY f.created_at DESC, f.rowid DESC
                 LIMIT 100
                 """,
                 (project_id,),

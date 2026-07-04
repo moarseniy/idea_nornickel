@@ -52,6 +52,7 @@ function bindEvents() {
 
   $("#newProjectBtn").addEventListener("click", createProject);
   $("#projectForm").addEventListener("submit", saveProject);
+  $("#deleteProjectBtn").addEventListener("click", deleteProject);
   $("#uploadBtn").addEventListener("click", () => $("#fileInput").click());
   $("#fileInput").addEventListener("change", uploadFiles);
   $("#promptFilesBtn").addEventListener("click", () => $("#promptFileInput").click());
@@ -151,6 +152,7 @@ async function refreshProjects() {
     await createProject({
       preventDefault() {},
       silent: true,
+      name: "Новый исследовательский проект",
     });
     return;
   }
@@ -162,12 +164,15 @@ async function refreshProjects() {
 
 async function createProject(event) {
   event?.preventDefault?.();
+  const silent = Boolean(event?.silent);
+  const projectName = String(event?.name || (silent ? "Новый исследовательский проект" : window.prompt("Название нового проекта", "")) || "").trim();
+  if (!projectName) return;
   setBusy(true);
   try {
     const payload = await api("/api/projects", {
       method: "POST",
       json: {
-        name: "Хвосты и флотация",
+        name: projectName.slice(0, 160),
         domain: "Обогащение цветных и благородных металлов",
         goal: "Повысить извлечение ценных компонентов из хвостов при сохранении качества концентрата.",
         constraints: "Использовать доступное лабораторное флотационное оборудование, минимизировать рост расхода реагентов и CAPEX.",
@@ -177,6 +182,27 @@ async function createProject(event) {
     state.projectId = payload.project.id;
     localStorage.setItem("hl.projectId", state.projectId);
     await refreshProjects();
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function deleteProject() {
+  if (!state.projectId) return;
+  const project = state.state?.project || state.projects.find((item) => item.id === state.projectId);
+  const name = project?.name || "текущий проект";
+  if (!window.confirm(`Удалить проект «${name}»? Это действие нельзя отменить.`)) return;
+  setBusy(true);
+  try {
+    await api(`/api/projects/${state.projectId}`, { method: "DELETE" });
+    localStorage.removeItem("hl.projectId");
+    state.projectId = null;
+    state.state = null;
+    state.openHypothesisId = null;
+    await refreshProjects();
+    toast("Проект удален");
   } catch (error) {
     toast(error.message);
   } finally {
@@ -200,7 +226,7 @@ async function saveProject(event) {
       },
     });
     await refreshProjects();
-    toast("Проект сохранен");
+    toast("Проект обновлен");
   } catch (error) {
     toast(error.message);
   } finally {
