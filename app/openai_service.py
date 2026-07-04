@@ -49,7 +49,7 @@ class OpenAIService:
                 raise ValueError("OpenAI response did not contain hypotheses")
             return normalized, {"mode": "openai", "model": self.settings.openai_model}
         except Exception as exc:  # noqa: BLE001
-            raise OpenAIServiceError(f"OpenAI generation failed: {exc}") from exc
+            raise OpenAIServiceError(f"OpenAI generation failed ({exc.__class__.__name__}): {exc}") from exc
 
     def extract_graph(self, document_text: str, source_id: str, source_name: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
         if not self.enabled or not self.settings.openai_graph_extraction or len(document_text.strip()) < 80:
@@ -146,14 +146,33 @@ class OpenAIService:
             text = self._call_text(instructions=instructions, prompt=prompt, max_output_tokens=2200)
             return text.strip(), {"mode": "openai", "model": self.settings.openai_model}
         except Exception as exc:  # noqa: BLE001
-            raise OpenAIServiceError(f"OpenAI chat failed: {exc}") from exc
+            raise OpenAIServiceError(f"OpenAI chat failed ({exc.__class__.__name__}): {exc}") from exc
+
+    def check_connection(self) -> dict[str, Any]:
+        if not self.enabled:
+            raise OpenAIServiceError("OPENAI_API_KEY не задан. Проверка OpenAI требует API key.")
+        try:
+            text = self._call_text(
+                instructions="Answer with one short word: ok.",
+                prompt="Connectivity check.",
+                max_output_tokens=16,
+            )
+            return {
+                "ok": True,
+                "model": self.settings.openai_model,
+                "base_url": self.settings.openai_base_url or "default",
+                "output": text[:80],
+            }
+        except Exception as exc:  # noqa: BLE001
+            raise OpenAIServiceError(f"OpenAI connectivity check failed ({exc.__class__.__name__}): {exc}") from exc
 
     def _call_text(self, instructions: str, prompt: str, max_output_tokens: int) -> str:
         from openai import OpenAI
 
-        kwargs: dict[str, Any] = {"api_key": self.settings.openai_api_key}
-        if self.settings.openai_base_url:
-            kwargs["base_url"] = self.settings.openai_base_url
+        kwargs: dict[str, Any] = {
+            "api_key": self.settings.openai_api_key,
+            "base_url": self.settings.openai_base_url or "https://api.openai.com/v1",
+        }
         client = OpenAI(**kwargs)
         response = client.responses.create(
             model=self.settings.openai_model,
@@ -353,5 +372,3 @@ def _as_float(value: Any, default: float) -> float:
         return max(0.0, min(100.0, float(value)))
     except (TypeError, ValueError):
         return default
-
-

@@ -20,6 +20,15 @@ def _as_int(value: str | None, default: int) -> int:
         return default
 
 
+def _normalize_base_url(value: str | None) -> str | None:
+    if not value or not value.strip():
+        return None
+    normalized = value.strip().rstrip("/")
+    if normalized.startswith(("http://", "https://")):
+        return normalized
+    return f"https://{normalized}"
+
+
 @dataclass(frozen=True)
 class Settings:
     app_name: str
@@ -31,6 +40,7 @@ class Settings:
     openai_model: str
     openai_base_url: str | None
     openai_graph_extraction: bool
+    log_level: str
     max_document_chars: int
     max_context_chars: int
     max_upload_bytes: int
@@ -53,8 +63,9 @@ def load_settings() -> Settings:
         sample_data_dir=sample_data_dir,
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
         openai_model=os.getenv("OPENAI_MODEL", "gpt-5.2").strip() or "gpt-5.2",
-        openai_base_url=os.getenv("OPENAI_BASE_URL") or None,
+        openai_base_url=_normalize_base_url(os.getenv("OPENAI_BASE_URL")),
         openai_graph_extraction=_as_bool(os.getenv("OPENAI_GRAPH_EXTRACTION"), True),
+        log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO",
         max_document_chars=_as_int(os.getenv("MAX_DOCUMENT_CHARS"), 120_000),
         max_context_chars=_as_int(os.getenv("MAX_CONTEXT_CHARS"), 28_000),
         max_upload_bytes=_as_int(os.getenv("MAX_UPLOAD_BYTES"), 35 * 1024 * 1024),

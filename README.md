@@ -33,11 +33,26 @@ http://localhost:8080
 
 Если `OPENAI_API_KEY` не задан, можно загрузить и распарсить источники, но генерация гипотез и чат вернут ошибку конфигурации.
 
+Логи диагностики:
+
+```bash
+docker compose logs -f hypothesis-lab
+```
+
+Минимальная проверка текущей OpenAI-конфигурации:
+
+```bash
+curl -X POST http://localhost:8080/api/openai/check
+```
+
 ### Переменные окружения
 
 - `OPENAI_API_KEY` — ключ OpenAI API.
 - `OPENAI_MODEL` — модель для генерации, по умолчанию `gpt-5.2`.
+- `OPENAI_BASE_URL` — опциональный совместимый endpoint; для обычного OpenAI API оставьте пустым.
 - `OPENAI_GRAPH_EXTRACTION` — LLM-извлечение узлов и связей из документов, по умолчанию `true`.
+- `LOG_LEVEL` — уровень логов приложения, по умолчанию `INFO`.
+- `UVICORN_LOG_LEVEL` — уровень логов Uvicorn, по умолчанию `info`.
 - `MAX_DOCUMENT_CHARS` — ограничение текста одного документа после парсинга.
 - `MAX_CONTEXT_CHARS` — ограничение контекста, передаваемого в модель.
 

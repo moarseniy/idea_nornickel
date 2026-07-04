@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 import mimetypes
 import uuid
 from pathlib import Path
@@ -31,6 +32,12 @@ from app.schemas import (
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
+logging.basicConfig(
+    level=getattr(logging, settings.log_level, logging.INFO),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+logger = logging.getLogger("hypothesis_lab")
+
 app = FastAPI(title=settings.app_name, version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
@@ -49,6 +56,14 @@ def startup() -> None:
     settings.storage_dir.mkdir(parents=True, exist_ok=True)
     settings.uploads_dir.mkdir(parents=True, exist_ok=True)
     db.initialize()
+    logger.info(
+        "Hypothesis Lab started: model=%s base_url=%s openai_key_present=%s graph_extraction=%s storage=%s",
+        settings.openai_model,
+        settings.openai_base_url or "default",
+        bool(settings.openai_api_key),
+        settings.openai_graph_extraction,
+        settings.storage_dir,
+    )
 
 
 @app.get("/")
@@ -63,8 +78,23 @@ def health() -> dict[str, Any]:
         "app": settings.app_name,
         "openai_enabled": ai.enabled,
         "openai_model": settings.openai_model,
+        "openai_base_url": settings.openai_base_url or "default",
         "graph_extraction": settings.openai_graph_extraction,
     }
+
+
+@app.post("/api/openai/check")
+def check_openai() -> dict[str, Any]:
+    try:
+        return ai.check_connection()
+    except OpenAIServiceError as exc:
+        logger.exception(
+            "OpenAI connectivity check failed: model=%s base_url=%s error=%s",
+            settings.openai_model,
+            settings.openai_base_url or "default",
+            exc,
+        )
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/api/projects")
@@ -190,6 +220,18 @@ def generate_hypotheses(
             include_roadmap=payload.include_roadmap,
         )
     except OpenAIServiceError as exc:
+        logger.exception(
+            "Hypothesis generation failed: project_id=%s model=%s actor=%s documents=%s graph_nodes=%s graph_edges=%s feedback=%s count=%s error=%s",
+            project_id,
+            settings.openai_model,
+            actor,
+            len(documents),
+            len(graph.get("nodes", [])),
+            len(graph.get("edges", [])),
+            len(feedback),
+            payload.count,
+            exc,
+        )
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     created = db.add_hypotheses(project_id, hypotheses, actor)
     for hypothesis in created:
@@ -216,6 +258,14 @@ def chat(
             message=payload.message,
         )
     except OpenAIServiceError as exc:
+        logger.exception(
+            "Chat failed: project_id=%s model=%s actor=%s message_chars=%s error=%s",
+            project_id,
+            settings.openai_model,
+            actor,
+            len(payload.message),
+            exc,
+        )
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     user_message = db.add_chat_message(project_id, "user", actor, payload.message, event=True)
     assistant_message = db.add_chat_message(project_id, "assistant", "AI", answer)
