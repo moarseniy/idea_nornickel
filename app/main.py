@@ -5,6 +5,7 @@ import html
 import io
 import logging
 import mimetypes
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -823,6 +824,18 @@ def _ingest_document_bytes(
 ) -> dict[str, Any]:
     display_name = safe_filename(filename)
     selected_ocr_languages = ocr_languages or settings.pdf_ocr_languages
+    started = time.perf_counter()
+    logger.info(
+        "Document parsing started: project_id=%s filename=%s bytes=%s ocr_langs=%s fast_mode=%s max_pages=%s image_max_pages=%s vision_max_pages=%s",
+        project_id,
+        display_name,
+        len(data),
+        ",".join(selected_ocr_languages),
+        settings.pdf_fast_mode,
+        settings.pdf_max_pages,
+        settings.pdf_image_max_pages,
+        settings.pdf_vision_max_pages,
+    )
     parsed = parse_document(
         display_name,
         content_type,
@@ -831,10 +844,21 @@ def _ingest_document_bytes(
         pdf_ocr_enabled=settings.pdf_ocr_enabled,
         pdf_ocr_languages=selected_ocr_languages,
         pdf_ocr_model_dir=settings.pdf_ocr_model_dir,
+        pdf_fast_mode=settings.pdf_fast_mode,
+        pdf_max_pages=settings.pdf_max_pages,
+        pdf_image_max_pages=settings.pdf_image_max_pages,
         pdf_ocr_min_chars=settings.pdf_ocr_min_chars,
         pdf_text_layer_min_chars=settings.pdf_text_layer_min_chars,
         pdf_render_dpi=settings.pdf_render_dpi,
         pdf_vision_max_pages=settings.pdf_vision_max_pages,
+    )
+    logger.info(
+        "Document parsing finished: project_id=%s filename=%s seconds=%.1f chars=%s meta=%s",
+        project_id,
+        display_name,
+        time.perf_counter() - started,
+        len(parsed.text),
+        parsed.metadata.get("pdf_parse") or {},
     )
     vision_meta = _enrich_vision_images(parsed, selected_ocr_languages)
     upload_dir = settings.uploads_dir / project_id
@@ -881,6 +905,9 @@ def _parse_prompt_attachment(
         pdf_ocr_enabled=settings.pdf_ocr_enabled,
         pdf_ocr_languages=selected_ocr_languages,
         pdf_ocr_model_dir=settings.pdf_ocr_model_dir,
+        pdf_fast_mode=settings.pdf_fast_mode,
+        pdf_max_pages=settings.pdf_max_pages,
+        pdf_image_max_pages=settings.pdf_image_max_pages,
         pdf_ocr_min_chars=settings.pdf_ocr_min_chars,
         pdf_text_layer_min_chars=settings.pdf_text_layer_min_chars,
         pdf_render_dpi=settings.pdf_render_dpi,

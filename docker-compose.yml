@@ -24,10 +24,13 @@ services:
       PDF_OCR_ENABLED: ${PDF_OCR_ENABLED:-true}
       PDF_OCR_LANGUAGES: ${PDF_OCR_LANGUAGES:-ru,en,ch_sim}
       PDF_OCR_MODEL_DIR: /app/storage/easyocr
+      PDF_FAST_MODE: ${PDF_FAST_MODE:-true}
+      PDF_MAX_PAGES: ${PDF_MAX_PAGES:-80}
+      PDF_IMAGE_MAX_PAGES: ${PDF_IMAGE_MAX_PAGES:-8}
       PDF_OCR_MIN_CHARS: ${PDF_OCR_MIN_CHARS:-12}
       PDF_TEXT_LAYER_MIN_CHARS: ${PDF_TEXT_LAYER_MIN_CHARS:-16}
-      PDF_RENDER_DPI: ${PDF_RENDER_DPI:-160}
-      PDF_VISION_MAX_PAGES: ${PDF_VISION_MAX_PAGES:-8}
+      PDF_RENDER_DPI: ${PDF_RENDER_DPI:-120}
+      PDF_VISION_MAX_PAGES: ${PDF_VISION_MAX_PAGES:-2}
     volumes:
       - ./storage:/app/storage
       - ./data:/app/data:ro

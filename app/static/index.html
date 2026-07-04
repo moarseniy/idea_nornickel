@@ -40,8 +40,11 @@
               </div>
               <div class="head-actions">
                 <div id="busyIndicator" class="busy" hidden>
-                  <span>Выполняется</span>
-                  <span class="busy-progress" role="progressbar" aria-label="Операция выполняется"></span>
+                  <span id="busyText">Выполняется</span>
+                  <span id="busyPercent" class="busy-percent"></span>
+                  <span class="busy-progress" role="progressbar" aria-label="Операция выполняется" aria-valuemin="0" aria-valuemax="100">
+                    <span id="busyProgressFill"></span>
+                  </span>
                 </div>
                 <button id="generateBtn" class="primary" type="button" title="Сгенерировать гипотезы">
                   <span>✦</span><b>Генерация</b>
@@ -218,7 +221,7 @@
     </div>
 
     <div id="toast" class="toast" hidden></div>
-    <script src="/static/graph-engine.js?v=20260704-project-update-label"></script>
-    <script src="/static/app.js?v=20260704-project-update-label"></script>
+    <script src="/static/graph-engine.js?v=20260705-progress-pdf"></script>
+    <script src="/static/app.js?v=20260705-progress-pdf"></script>
   </body>
 </html>

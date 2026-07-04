@@ -9,6 +9,7 @@ const state = {
   graphKey: "",
   promptFiles: [],
   settingsTab: "project",
+  busyTimer: null,
 };
 
 const graphView = {
@@ -167,7 +168,7 @@ async function createProject(event) {
   const silent = Boolean(event?.silent);
   const projectName = String(event?.name || (silent ? "Новый исследовательский проект" : window.prompt("Название нового проекта", "")) || "").trim();
   if (!projectName) return;
-  setBusy(true);
+  setBusy({ label: "Создание проекта", progress: 18 });
   try {
     const payload = await api("/api/projects", {
       method: "POST",
@@ -194,7 +195,7 @@ async function deleteProject() {
   const project = state.state?.project || state.projects.find((item) => item.id === state.projectId);
   const name = project?.name || "текущий проект";
   if (!window.confirm(`Удалить проект «${name}»? Это действие нельзя отменить.`)) return;
-  setBusy(true);
+  setBusy({ label: "Удаление проекта", progress: 25 });
   try {
     await api(`/api/projects/${state.projectId}`, { method: "DELETE" });
     localStorage.removeItem("hl.projectId");
@@ -213,7 +214,7 @@ async function deleteProject() {
 async function saveProject(event) {
   event.preventDefault();
   if (!state.projectId) return;
-  setBusy(true);
+  setBusy({ label: "Обновление проекта", progress: 35 });
   try {
     await api(`/api/projects/${state.projectId}`, {
       method: "PATCH",
@@ -234,32 +235,51 @@ async function saveProject(event) {
   }
 }
 
-async function loadState() {
+async function loadState(options = {}) {
   if (!state.projectId) return;
-  setBusy(true);
+  const manageBusy = options.busy !== false;
+  if (manageBusy) setBusy({ label: "Обновление данных", progress: 45 });
   try {
     state.state = await api(`/api/projects/${state.projectId}/state`);
     renderAll();
   } catch (error) {
     toast(error.message);
   } finally {
-    setBusy(false);
+    if (manageBusy) setBusy(false);
   }
 }
 
 async function uploadFiles(event) {
   const files = Array.from(event.target.files || []);
   if (!files.length || !state.projectId) return;
-  setBusy(true);
+  setBusy({ label: `Подготовка файлов 0/${files.length}`, progress: 0 });
   try {
-    for (const file of files) {
+    for (const [index, file] of files.entries()) {
+      const shortName = trim(file.name, 24);
       const form = new FormData();
       form.append("file", file);
       const ocrLanguages = $("#sourceLanguageSelect").value;
       if (ocrLanguages) form.append("ocr_languages", ocrLanguages);
-      await api(`/api/projects/${state.projectId}/documents`, { method: "POST", body: form });
+      await apiUpload(
+        `/api/projects/${state.projectId}/documents`,
+        { method: "POST", body: form },
+        {
+          onProgress: (percent) => {
+            const overall = ((index + (percent / 100) * 0.62) / files.length) * 100;
+            setBusy({ label: `Загрузка ${index + 1}/${files.length}: ${shortName}`, progress: overall });
+          },
+          onUploaded: () => {
+            const overall = ((index + 0.74) / files.length) * 100;
+            setBusy({ label: `Парсинг и граф ${index + 1}/${files.length}: ${shortName}`, progress: overall });
+            startBusyStages(fileProcessingBusyStages(index, files.length, shortName));
+          },
+        },
+      );
+      stopBusyStages();
+      setBusy({ label: `Файл обработан ${index + 1}/${files.length}`, progress: ((index + 1) / files.length) * 100 });
     }
-    await loadState();
+    setBusy({ label: "Обновление графа", progress: 96 });
+    await loadState({ busy: false });
     toast(`Загружено файлов: ${files.length}`);
   } catch (error) {
     toast(error.message);
@@ -269,9 +289,22 @@ async function uploadFiles(event) {
   }
 }
 
+function fileProcessingBusyStages(index, totalFiles, filename) {
+  const start = ((index + 0.74) / totalFiles) * 100;
+  const ocr = ((index + 0.84) / totalFiles) * 100;
+  const graph = ((index + 0.92) / totalFiles) * 100;
+  const final = ((index + 0.96) / totalFiles) * 100;
+  return [
+    { label: `Парсинг PDF ${index + 1}/${totalFiles}: ${filename}`, progress: start, duration: 900 },
+    { label: `OCR / vision ${index + 1}/${totalFiles}: ${filename}`, progress: ocr, duration: 9000 },
+    { label: `Построение графа ${index + 1}/${totalFiles}: ${filename}`, progress: graph, duration: 9000 },
+    { label: `Сохранение источника ${index + 1}/${totalFiles}: ${filename}`, progress: final, target: final, duration: 5000 },
+  ];
+}
+
 async function importSamples() {
   if (!state.projectId) return;
-  setBusy(true);
+  setBusy({ label: "Импорт источников", progress: 15 });
   try {
     const payload = await api(`/api/projects/${state.projectId}/documents/import-samples`, {
       method: "POST",
@@ -281,7 +314,8 @@ async function importSamples() {
         ocr_languages: selectedSourceLanguages(),
       },
     });
-    await loadState();
+    setBusy({ label: "Обновление графа", progress: 94 });
+    await loadState({ busy: false });
     toast(`Импортировано: ${payload.imported.length}`);
   } catch (error) {
     toast(error.message);
@@ -311,7 +345,6 @@ function selectedSourceLanguages() {
 
 async function generateHypotheses() {
   if (!state.projectId) return;
-  setBusy(true);
   try {
     const exclusions = $("#exclusionsInput").value
       .split(",")
@@ -326,12 +359,19 @@ async function generateHypotheses() {
       research_query: $("#researchQueryInput")?.value.trim() || "",
       research_sources: Number($("#researchSourcesInput")?.value || 6),
     };
+    const stages = generationBusyStages({
+      research: requestPayload.research_enabled,
+      attachments: state.promptFiles.length,
+      start: state.promptFiles.length ? 32 : 8,
+    });
+    if (!state.promptFiles.length) startBusyStages(stages);
     const payload = state.promptFiles.length
-      ? await generateWithPromptFiles(requestPayload)
+      ? await generateWithPromptFiles(requestPayload, stages)
       : await api(`/api/projects/${state.projectId}/generate`, {
           method: "POST",
           json: requestPayload,
         });
+    setBusy({ label: "Обновление интерфейса", progress: 97 });
     state.state = payload.state;
     state.promptFiles = [];
     renderPromptFiles();
@@ -344,13 +384,37 @@ async function generateHypotheses() {
   }
 }
 
-async function generateWithPromptFiles(requestPayload) {
+async function generateWithPromptFiles(requestPayload, stages = []) {
   const form = new FormData();
   form.append("payload_json", JSON.stringify(requestPayload));
   const ocrLanguages = $("#sourceLanguageSelect").value;
   if (ocrLanguages) form.append("ocr_languages", ocrLanguages);
   state.promptFiles.forEach((file) => form.append("files", file));
-  return api(`/api/projects/${state.projectId}/generate-with-files`, { method: "POST", body: form });
+  return apiUpload(
+    `/api/projects/${state.projectId}/generate-with-files`,
+    { method: "POST", body: form },
+    {
+      onProgress: (percent) => setBusy({ label: `Загрузка вложений к промпту`, progress: Math.min(30, percent * 0.3) }),
+      onUploaded: () => startBusyStages(stages),
+    },
+  );
+}
+
+function generationBusyStages({ research, attachments, start = 8 }) {
+  const steps = [
+    { label: "Подготовка контекста", progress: start, duration: 900 },
+  ];
+  if (attachments) {
+    steps.push({ label: "Разбор вложений к промпту", progress: Math.max(34, start + 4), duration: 3600 });
+  }
+  if (research) {
+    steps.push({ label: "Web research и источники", progress: attachments ? 48 : 26, duration: 8000 });
+  }
+  steps.push(
+    { label: "Генерация гипотез", progress: research ? 66 : attachments ? 58 : 38, duration: 10000 },
+    { label: "Сохранение и обновление графа", progress: 86, duration: 6000 },
+  );
+  return steps;
 }
 
 function generationToast(meta = {}) {
@@ -364,7 +428,7 @@ function generationToast(meta = {}) {
 }
 
 async function updateStatus(id, status) {
-  setBusy(true);
+  setBusy({ label: "Обновление статуса", progress: 45 });
   try {
     const payload = await api(`/api/projects/${state.projectId}/hypotheses/${id}/status`, {
       method: "PATCH",
@@ -383,7 +447,7 @@ async function sendReaction(id, reaction) {
   if (!id || !["liked", "disliked"].includes(reaction)) return;
   const current = reactionSummary(id).mine;
   const nextReaction = current === reaction ? "neutral" : reaction;
-  setBusy(true);
+  setBusy({ label: "Сохранение реакции", progress: 45 });
   try {
     const payload = await api(`/api/projects/${state.projectId}/hypotheses/${id}/feedback`, {
       method: "POST",
@@ -405,7 +469,7 @@ async function sendReaction(id, reaction) {
 
 async function sendFeedback(form) {
   const id = form.dataset.id;
-  setBusy(true);
+  setBusy({ label: "Сохранение фидбэка", progress: 45 });
   try {
     const payload = await api(`/api/projects/${state.projectId}/hypotheses/${id}/feedback`, {
       method: "POST",
@@ -431,7 +495,12 @@ async function sendChat(event) {
   const message = input.value.trim();
   if (!message) return;
   input.value = "";
-  setBusy(true);
+  startBusyStages([
+    { label: "Отправка сообщения", progress: 18, duration: 700 },
+    { label: "Анализ контекста", progress: 38, duration: 2400 },
+    { label: "Ответ ассистента", progress: 68, duration: 5200 },
+    { label: "Обновление диалога", progress: 90, duration: 2200 },
+  ]);
   try {
     const payload = await api(`/api/projects/${state.projectId}/chat`, {
       method: "POST",
@@ -1501,15 +1570,110 @@ async function api(path, options = {}) {
   return response.json();
 }
 
+function apiUpload(path, options = {}, handlers = {}) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(options.method || "POST", path);
+    xhr.setRequestHeader("X-User", encodeURIComponent(actor()));
+    Object.entries(options.headers || {}).forEach(([key, value]) => xhr.setRequestHeader(key, value));
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return;
+      handlers.onProgress?.((event.loaded / event.total) * 100, event);
+    };
+    xhr.upload.onload = () => handlers.onUploaded?.();
+    xhr.onerror = () => reject(new Error("Не удалось выполнить запрос"));
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText || "{}"));
+        } catch (error) {
+          reject(new Error(`Некорректный ответ сервера: ${error.message}`));
+        }
+        return;
+      }
+      let detail = xhr.statusText || "Ошибка запроса";
+      try {
+        const payload = JSON.parse(xhr.responseText || "{}");
+        detail = payload.detail || detail;
+      } catch (_) {
+        detail = xhr.responseText || detail;
+      }
+      reject(new Error(detail));
+    };
+    xhr.send(options.body || null);
+  });
+}
+
 function openExport(type) {
   if (!state.projectId) return;
   window.open(`/api/projects/${state.projectId}/export.${type}`, "_blank", "noopener");
 }
 
+function startBusyStages(steps) {
+  stopBusyStages();
+  if (!steps?.length) {
+    setBusy(true);
+    return;
+  }
+  const timeline = [];
+  let total = 0;
+  steps.forEach((step) => {
+    const duration = Number(step.duration || 1000);
+    timeline.push({ ...step, start: total, end: total + duration });
+    total += duration;
+  });
+  const startedAt = performance.now();
+  const tick = () => {
+    const rawElapsed = performance.now() - startedAt;
+    const elapsed = Math.min(rawElapsed, Math.max(1, total - 1));
+    const current = timeline.find((step) => elapsed >= step.start && elapsed < step.end) || timeline.at(-1);
+    const next = timeline[timeline.indexOf(current) + 1];
+    const localElapsed = next ? elapsed : rawElapsed;
+    const local = clamp((localElapsed - current.start) / Math.max(1, current.end - current.start), 0, 1);
+    const target = next ? Number(next.progress ?? current.progress ?? 0) : Number(current.target ?? 94);
+    const progress = Number(current.progress ?? 0) + (target - Number(current.progress ?? 0)) * local;
+    setBusy({ label: current.label, progress });
+    state.busyTimer = window.setTimeout(tick, 420);
+  };
+  tick();
+}
+
+function stopBusyStages() {
+  if (state.busyTimer) {
+    window.clearTimeout(state.busyTimer);
+    state.busyTimer = null;
+  }
+}
+
 function setBusy(value) {
   const indicator = $("#busyIndicator");
-  indicator.hidden = !value;
-  indicator.setAttribute("aria-busy", String(Boolean(value)));
+  if (!indicator) return;
+  const textNode = $("#busyText");
+  const percentNode = $("#busyPercent");
+  const fillNode = $("#busyProgressFill");
+  if (!value) {
+    stopBusyStages();
+    indicator.hidden = true;
+    indicator.classList.remove("is-determinate");
+    indicator.setAttribute("aria-busy", "false");
+    $(".busy-progress", indicator)?.removeAttribute("aria-valuenow");
+    if (fillNode) fillNode.style.width = "0%";
+    if (percentNode) percentNode.textContent = "";
+    if (textNode) textNode.textContent = "Выполняется";
+    return;
+  }
+
+  const options = typeof value === "object" ? value : { label: value === true ? "Выполняется" : String(value) };
+  const progress = Number.isFinite(Number(options.progress)) ? clamp(Number(options.progress), 0, 100) : null;
+  const progressBar = $(".busy-progress", indicator);
+  indicator.hidden = false;
+  indicator.setAttribute("aria-busy", "true");
+  indicator.classList.toggle("is-determinate", progress !== null);
+  if (textNode) textNode.textContent = options.label || "Выполняется";
+  if (percentNode) percentNode.textContent = progress !== null ? `${Math.round(progress)}%` : "";
+  if (fillNode) fillNode.style.width = progress !== null ? `${progress}%` : "0%";
+  if (progress !== null) progressBar?.setAttribute("aria-valuenow", String(Math.round(progress)));
+  else progressBar?.removeAttribute("aria-valuenow");
 }
 
 function toast(message) {

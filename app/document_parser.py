@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 import re
 import warnings
 from dataclasses import dataclass, field
@@ -10,6 +11,8 @@ from typing import Any
 
 
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".csv", ".pdf", ".docx", ".xlsx", ".xlsm", ".png", ".jpg", ".jpeg"}
+LARGE_PDF_BYTES = 80 * 1024 * 1024
+logger = logging.getLogger("hypothesis_lab")
 
 
 @dataclass
@@ -42,10 +45,13 @@ def parse_document(
     pdf_ocr_enabled: bool = True,
     pdf_ocr_languages: list[str] | None = None,
     pdf_ocr_model_dir: Path | None = None,
+    pdf_fast_mode: bool = True,
+    pdf_max_pages: int = 80,
+    pdf_image_max_pages: int = 8,
     pdf_ocr_min_chars: int = 12,
     pdf_text_layer_min_chars: int = 16,
-    pdf_render_dpi: int = 160,
-    pdf_vision_max_pages: int = 8,
+    pdf_render_dpi: int = 120,
+    pdf_vision_max_pages: int = 2,
 ) -> ParsedDocument:
     extension = Path(filename).suffix.lower()
     metadata: dict[str, object] = {
@@ -69,6 +75,9 @@ def parse_document(
             ocr_enabled=pdf_ocr_enabled,
             ocr_languages=selected_ocr_languages,
             ocr_model_dir=pdf_ocr_model_dir,
+            fast_mode_enabled=pdf_fast_mode,
+            max_pages=pdf_max_pages,
+            image_max_pages=pdf_image_max_pages,
             ocr_min_chars=pdf_ocr_min_chars,
             text_layer_min_chars=pdf_text_layer_min_chars,
             render_dpi=pdf_render_dpi,
@@ -137,6 +146,9 @@ def _parse_pdf(
     ocr_enabled: bool,
     ocr_languages: list[str],
     ocr_model_dir: Path | None,
+    fast_mode_enabled: bool,
+    max_pages: int,
+    image_max_pages: int,
     ocr_min_chars: int,
     text_layer_min_chars: int,
     render_dpi: int,
@@ -144,13 +156,35 @@ def _parse_pdf(
 ) -> tuple[str, dict[str, object], list[VisionImage]]:
     from pypdf import PdfReader
 
+    original_image_max_pages = image_max_pages
+    original_vision_max_pages = vision_max_pages
+    original_render_dpi = render_dpi
+    large_file_fast_mode = fast_mode_enabled and len(data) >= LARGE_PDF_BYTES
+    if large_file_fast_mode:
+        image_max_pages = min(image_max_pages, 4)
+        vision_max_pages = min(vision_max_pages, 2)
+        render_dpi = min(render_dpi, 110)
+
     reader = PdfReader(io.BytesIO(data))
     fitz_document: Any | None = None
     chunks: list[str] = []
     vision_images: list[VisionImage] = []
     page_modes: list[dict[str, object]] = []
-    counters = {"text_layer": 0, "ocr": 0, "vision": 0, "blank": 0, "failed": 0}
-    parsed_pages = min(len(reader.pages), 80)
+    counters = {"text_layer": 0, "ocr": 0, "vision": 0, "blank": 0, "skipped": 0, "failed": 0}
+    parsed_pages_limit = max(1, min(max_pages, 40 if large_file_fast_mode else max_pages))
+    parsed_pages = min(len(reader.pages), parsed_pages_limit)
+    rendered_image_pages = 0
+    logger.info(
+        "PDF parse plan: filename=%s bytes=%s pages=%s parsed_pages=%s image_max_pages=%s vision_max_pages=%s render_dpi=%s large_fast=%s",
+        filename,
+        len(data),
+        len(reader.pages),
+        parsed_pages,
+        image_max_pages,
+        vision_max_pages,
+        render_dpi,
+        large_file_fast_mode,
+    )
 
     for page_index, page in enumerate(reader.pages[:parsed_pages]):
         page_no = page_index + 1
@@ -162,6 +196,25 @@ def _parse_pdf(
             page_modes.append({"page": page_no, "mode": "text_layer", "chars": len(page_text)})
             continue
 
+        if rendered_image_pages >= max(0, image_max_pages):
+            if page_text:
+                chunks.append(f"[стр. {page_no} | short text-layer]\n{page_text}")
+                counters["text_layer"] += 1
+                page_modes.append({"page": page_no, "mode": "short_text_layer_image_skipped", "chars": len(page_text)})
+            else:
+                counters["skipped"] += 1
+                page_modes.append({"page": page_no, "mode": "image_page_skipped_limit"})
+            continue
+
+        rendered_image_pages += 1
+        logger.info(
+            "PDF image page processing: filename=%s page=%s/%s image_page=%s/%s",
+            filename,
+            page_no,
+            parsed_pages,
+            rendered_image_pages,
+            image_max_pages,
+        )
         rendered_page, render_error = _render_pdf_page(data, page_index, render_dpi, fitz_document)
         if rendered_page is None:
             if page_text:
@@ -227,11 +280,20 @@ def _parse_pdf(
     meta = {
         "pages": len(reader.pages),
         "parsed_pages": parsed_pages,
+        "parsed_pages_limit": parsed_pages_limit,
         "pdf_parse": counters,
         "pdf_page_modes": page_modes,
         "ocr_enabled": ocr_enabled,
         "ocr_languages": ocr_languages,
         "ocr_language_groups": _ocr_language_groups(ocr_languages),
+        "image_max_pages": image_max_pages,
+        "original_image_max_pages": original_image_max_pages,
+        "fast_mode_enabled": fast_mode_enabled,
+        "large_file_fast_mode": large_file_fast_mode,
+        "original_vision_max_pages": original_vision_max_pages,
+        "effective_vision_max_pages": vision_max_pages,
+        "original_render_dpi": original_render_dpi,
+        "effective_render_dpi": render_dpi,
         "text_layer_min_chars": text_layer_min_chars,
         "vision_queued_pages": len(vision_images),
     }

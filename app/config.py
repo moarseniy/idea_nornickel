@@ -49,6 +49,9 @@ class Settings:
     pdf_ocr_enabled: bool
     pdf_ocr_languages: list[str]
     pdf_ocr_model_dir: Path
+    pdf_fast_mode: bool
+    pdf_max_pages: int
+    pdf_image_max_pages: int
     pdf_ocr_min_chars: int
     pdf_text_layer_min_chars: int
     pdf_render_dpi: int
@@ -89,10 +92,13 @@ def load_settings() -> Settings:
         pdf_ocr_enabled=_as_bool(os.getenv("PDF_OCR_ENABLED"), True),
         pdf_ocr_languages=pdf_ocr_languages or ["ru", "en", "ch_sim"],
         pdf_ocr_model_dir=pdf_ocr_model_dir,
+        pdf_fast_mode=_as_bool(os.getenv("PDF_FAST_MODE"), True),
+        pdf_max_pages=_as_int(os.getenv("PDF_MAX_PAGES"), 80),
+        pdf_image_max_pages=_as_int(os.getenv("PDF_IMAGE_MAX_PAGES"), 8),
         pdf_ocr_min_chars=_as_int(os.getenv("PDF_OCR_MIN_CHARS"), 12),
         pdf_text_layer_min_chars=_as_int(os.getenv("PDF_TEXT_LAYER_MIN_CHARS"), 16),
-        pdf_render_dpi=_as_int(os.getenv("PDF_RENDER_DPI"), 160),
-        pdf_vision_max_pages=_as_int(os.getenv("PDF_VISION_MAX_PAGES"), 8),
+        pdf_render_dpi=_as_int(os.getenv("PDF_RENDER_DPI"), 120),
+        pdf_vision_max_pages=_as_int(os.getenv("PDF_VISION_MAX_PAGES"), 2),
         openai_vision_detail=openai_vision_detail,
     )
 
