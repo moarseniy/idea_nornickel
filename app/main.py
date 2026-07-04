@@ -7,6 +7,7 @@ import mimetypes
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 import fitz
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
@@ -921,5 +922,5 @@ def _require_project(project_id: str) -> dict[str, Any]:
 
 
 def _actor(value: str | None) -> str:
-    actor = (value or "researcher").strip()
+    actor = unquote(value or "researcher").strip()
     return actor[:80] or "researcher"

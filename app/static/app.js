@@ -1368,7 +1368,7 @@ function stableNumber(value) {
 }
 
 async function api(path, options = {}) {
-  const headers = { "X-User": actor(), ...(options.headers || {}) };
+  const headers = { "X-User": encodeURIComponent(actor()), ...(options.headers || {}) };
   const fetchOptions = { ...options, headers };
   if (options.json !== undefined) {
     headers["Content-Type"] = "application/json";

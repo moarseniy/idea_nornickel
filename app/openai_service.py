@@ -58,7 +58,12 @@ class OpenAIService:
             "Ответ верни строго валидным JSON без markdown."
         )
         try:
-            text = self._call_text(instructions=instructions, prompt=prompt, max_output_tokens=6000)
+            text = self._call_text(
+                instructions=instructions,
+                prompt=prompt,
+                max_output_tokens=12000,
+                text_format=_hypotheses_text_format(),
+            )
             payload = _extract_json(text)
             hypotheses = payload.get("hypotheses", []) if isinstance(payload, dict) else []
             normalized = [_normalize_hypothesis(item, weights) for item in hypotheses[:count] if isinstance(item, dict)]
@@ -300,14 +305,32 @@ class OpenAIService:
         except Exception as exc:  # noqa: BLE001
             raise OpenAIServiceError(f"OpenAI connectivity check failed ({exc.__class__.__name__}): {exc}") from exc
 
-    def _call_text(self, instructions: str, prompt: str, max_output_tokens: int) -> str:
-        return self._call_response_text(instructions=instructions, input_payload=prompt, max_output_tokens=max_output_tokens)
+    def _call_text(
+        self,
+        instructions: str,
+        prompt: str,
+        max_output_tokens: int,
+        text_format: dict[str, Any] | None = None,
+    ) -> str:
+        return self._call_response_text(
+            instructions=instructions,
+            input_payload=prompt,
+            max_output_tokens=max_output_tokens,
+            text_format=text_format,
+        )
 
-    def _call_response_text(self, instructions: str, input_payload: Any, max_output_tokens: int) -> str:
+    def _call_response_text(
+        self,
+        instructions: str,
+        input_payload: Any,
+        max_output_tokens: int,
+        text_format: dict[str, Any] | None = None,
+    ) -> str:
         response = self._call_response(
             instructions=instructions,
             input_payload=input_payload,
             max_output_tokens=max_output_tokens,
+            text_format=text_format,
         )
         output_text = getattr(response, "output_text", None)
         if output_text:
@@ -323,6 +346,7 @@ class OpenAIService:
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
         include: list[str] | None = None,
+        text_format: dict[str, Any] | None = None,
     ) -> Any:
         from openai import OpenAI
 
@@ -343,6 +367,8 @@ class OpenAIService:
             request["tool_choice"] = tool_choice
         if include:
             request["include"] = include
+        if text_format:
+            request["text"] = {"format": text_format}
         return client.responses.create(**request)
 
 
@@ -419,6 +445,93 @@ JSON-схема ответа:
   ]
 }}
 """.strip()
+
+
+def _hypotheses_text_format() -> dict[str, Any]:
+    evidence_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "source": {"type": "string"},
+            "quote": {"type": "string"},
+            "why": {"type": "string"},
+            "url": {"type": "string"},
+            "kind": {"type": "string"},
+        },
+        "required": ["source", "quote", "why", "url", "kind"],
+    }
+    roadmap_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "step": {"type": "integer"},
+            "title": {"type": "string"},
+            "output": {"type": "string"},
+            "owner": {"type": "string"},
+        },
+        "required": ["step", "title", "output", "owner"],
+    }
+    economics_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "item": {"type": "string"},
+            "assumption": {"type": "string"},
+            "calculation": {"type": "string"},
+            "expected_effect": {"type": "string"},
+            "confidence": {"type": "string"},
+            "data_needed": {"type": "string"},
+        },
+        "required": ["item", "assumption", "calculation", "expected_effect", "confidence", "data_needed"],
+    }
+    hypothesis_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "title": {"type": "string"},
+            "statement": {"type": "string"},
+            "rationale": {"type": "string"},
+            "mechanism": {"type": "string"},
+            "novelty": {"type": "integer"},
+            "feasibility": {"type": "integer"},
+            "impact": {"type": "integer"},
+            "risk": {"type": "integer"},
+            "uncertainty": {"type": "string"},
+            "evidence": {"type": "array", "items": evidence_schema},
+            "roadmap": {"type": "array", "items": roadmap_schema},
+            "economics": {"type": "array", "items": economics_schema},
+        },
+        "required": [
+            "title",
+            "statement",
+            "rationale",
+            "mechanism",
+            "novelty",
+            "feasibility",
+            "impact",
+            "risk",
+            "uncertainty",
+            "evidence",
+            "roadmap",
+            "economics",
+        ],
+    }
+    return {
+        "type": "json_schema",
+        "name": "hypothesis_report_batch",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "hypotheses": {
+                    "type": "array",
+                    "items": hypothesis_schema,
+                }
+            },
+            "required": ["hypotheses"],
+        },
+    }
 
 
 def _build_research_prompt(
