@@ -32,7 +32,7 @@ const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selec
 document.addEventListener("DOMContentLoaded", init);
 
 async function init() {
-  $("#actorInput").value = localStorage.getItem("hl.actor") || "researcher";
+  $("#actorInput").value = localStorage.getItem("hl.actor") || "User";
   renderActorBadge();
   bindEvents();
   await refreshProjects();
@@ -40,7 +40,7 @@ async function init() {
 
 function bindEvents() {
   $("#actorInput").addEventListener("input", (event) => {
-    localStorage.setItem("hl.actor", event.target.value.trim() || "researcher");
+    localStorage.setItem("hl.actor", event.target.value.trim() || "User");
     renderActorBadge();
   });
 
@@ -1519,7 +1519,7 @@ function toast(message) {
 }
 
 function actor() {
-  return $("#actorInput").value.trim() || "researcher";
+  return $("#actorInput").value.trim() || "User";
 }
 
 function svgEl(name, attrs = {}) {

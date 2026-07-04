@@ -85,7 +85,7 @@ def load_settings() -> Settings:
         log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO",
         max_document_chars=_as_int(os.getenv("MAX_DOCUMENT_CHARS"), 120_000),
         max_context_chars=_as_int(os.getenv("MAX_CONTEXT_CHARS"), 28_000),
-        max_upload_bytes=_as_int(os.getenv("MAX_UPLOAD_BYTES"), 35 * 1024 * 1024),
+        max_upload_bytes=_as_int(os.getenv("MAX_UPLOAD_BYTES"), 160 * 1024 * 1024),
         pdf_ocr_enabled=_as_bool(os.getenv("PDF_OCR_ENABLED"), True),
         pdf_ocr_languages=pdf_ocr_languages or ["ru", "en", "ch_sim"],
         pdf_ocr_model_dir=pdf_ocr_model_dir,

@@ -999,5 +999,5 @@ def _require_project(project_id: str) -> dict[str, Any]:
 
 
 def _actor(value: str | None) -> str:
-    actor = unquote(value or "researcher").strip()
-    return actor[:80] or "researcher"
+    actor = unquote(value or "User").strip()
+    return actor[:80] or "User"
