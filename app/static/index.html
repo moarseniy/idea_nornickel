@@ -103,6 +103,22 @@
               </label>
             </div>
 
+            <div class="control-block research-block">
+              <div class="block-title">Research</div>
+              <label class="toggle-row">
+                <input id="researchEnabledInput" type="checkbox" />
+                <span>Web search</span>
+              </label>
+              <label>
+                <span>Тема</span>
+                <textarea id="researchQueryInput" rows="2" placeholder="оставьте пустым для авто-темы из KPI и графа"></textarea>
+              </label>
+              <label>
+                <span>Источников</span>
+                <input id="researchSourcesInput" type="number" min="1" max="12" value="6" />
+              </label>
+            </div>
+
             <div class="control-block actions">
               <label class="source-language-field">
                 <span>Язык источника</span>
@@ -165,6 +181,7 @@
               <button data-dock-tab="versions" type="button">
                 Версии <span id="versionCount">0</span>
               </button>
+              <button id="dockExpandBtn" class="dock-expand-button" type="button" hidden>Развернуть</button>
               <div class="dock-tabs-spacer"></div>
               <span id="dockGraphStats">0 узлов · 0 связей</span>
             </div>

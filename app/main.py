@@ -59,8 +59,9 @@ def startup() -> None:
     settings.uploads_dir.mkdir(parents=True, exist_ok=True)
     db.initialize()
     logger.info(
-        "Hypothesis Lab started: model=%s base_url=%s openai_key_present=%s graph_extraction=%s pdf_ocr=%s ocr_langs=%s storage=%s",
+        "Hypothesis Lab started: model=%s research_model=%s base_url=%s openai_key_present=%s graph_extraction=%s pdf_ocr=%s ocr_langs=%s storage=%s",
         settings.openai_model,
+        settings.openai_research_model,
         settings.openai_base_url or "default",
         bool(settings.openai_api_key),
         settings.openai_graph_extraction,
@@ -82,6 +83,8 @@ def health() -> dict[str, Any]:
         "app": settings.app_name,
         "openai_enabled": ai.enabled,
         "openai_model": settings.openai_model,
+        "openai_research_model": settings.openai_research_model,
+        "openai_research_max_sources": settings.openai_research_max_sources,
         "openai_base_url": settings.openai_base_url or "default",
         "graph_extraction": settings.openai_graph_extraction,
         "pdf_ocr_enabled": settings.pdf_ocr_enabled,
@@ -141,6 +144,7 @@ def project_state(project_id: str) -> dict[str, Any]:
         "runtime": {
             "openai_enabled": ai.enabled,
             "openai_model": settings.openai_model,
+            "openai_research_model": settings.openai_research_model,
         },
     }
 
@@ -261,6 +265,46 @@ def _generate_hypotheses_core(
     graph = db.get_graph(project_id)
     feedback = db.list_feedback(project_id)
     weights = {**project.get("settings", {}), **payload.weights}
+    research_context: dict[str, Any] | None = None
+    research_meta: dict[str, Any] = {"enabled": False}
+
+    if payload.research_enabled:
+        try:
+            research_context, research_meta = ai.research_topic(
+                project=project,
+                documents=documents,
+                graph=graph,
+                query=payload.research_query,
+                max_sources=min(payload.research_sources, settings.openai_research_max_sources),
+            )
+            research_meta = {
+                **research_meta,
+                "enabled": True,
+                "query": research_context.get("query"),
+                "sources": research_context.get("sources", []),
+            }
+            logger.info(
+                "Research completed: project_id=%s model=%s actor=%s sources=%s query=%s",
+                project_id,
+                settings.openai_research_model,
+                actor,
+                len(research_context.get("sources", [])),
+                research_context.get("query"),
+            )
+        except OpenAIServiceError as exc:
+            logger.exception(
+                "Research failed: project_id=%s model=%s actor=%s documents=%s graph_nodes=%s graph_edges=%s query=%s error=%s",
+                project_id,
+                settings.openai_research_model,
+                actor,
+                len(documents),
+                len(graph.get("nodes", [])),
+                len(graph.get("edges", [])),
+                payload.research_query,
+                exc,
+            )
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     try:
         hypotheses, meta = ai.generate_hypotheses(
             project=project,
@@ -271,6 +315,7 @@ def _generate_hypotheses_core(
             weights=weights,
             exclusions=payload.exclusions,
             include_roadmap=payload.include_roadmap,
+            research_context=research_context,
         )
     except OpenAIServiceError as exc:
         logger.exception(
@@ -286,7 +331,7 @@ def _generate_hypotheses_core(
             exc,
         )
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    meta = {**meta, "prompt_attachments": len(prompt_documents)}
+    meta = {**meta, "prompt_attachments": len(prompt_documents), "research": research_meta}
     created = db.add_hypotheses(project_id, hypotheses, actor)
     for hypothesis in created:
         nodes, edges = graph_from_hypothesis(hypothesis)
@@ -385,6 +430,8 @@ def export_csv(project_id: str) -> Response:
             "impact",
             "risk",
             "status",
+            "evidence_urls",
+            "economics",
             "created_at",
         ],
     )
@@ -399,6 +446,8 @@ def export_csv(project_id: str) -> Response:
                 "feasibility": f"{values['feasibility']:.0f}",
                 "impact": f"{values['impact']:.0f}",
                 "risk": f"{values['risk']:.0f}",
+                "evidence_urls": _evidence_url_text(item),
+                "economics": _economics_export_text(item.get("economics")),
             }
         )
     return Response(
@@ -490,12 +539,21 @@ def _render_markdown_export(data: dict[str, Any]) -> str:
             for evidence in item.get("evidence") or []:
                 source = evidence.get("source") or "source"
                 quote = evidence.get("quote") or evidence.get("why") or ""
-                lines.append(f"- **{source}:** {quote}")
+                url = evidence.get("url") or ""
+                suffix = f" ([link]({url}))" if url else ""
+                why = evidence.get("why") or ""
+                context = f" — {why}" if why and why != quote else ""
+                lines.append(f"- **{source}:** {quote}{context}{suffix}")
             lines.append("")
         if item.get("roadmap"):
-            lines.extend(["**Дорожная карта:**", ""])
+            lines.extend(["**План внедрения / проверки:**", ""])
             for step in item.get("roadmap") or []:
                 lines.append(f"- {step.get('step')}. {step.get('title')} -> {step.get('output')}")
+            lines.append("")
+        if item.get("economics"):
+            lines.extend(["**Возможная экономика:**", ""])
+            for economic in item.get("economics") or []:
+                lines.append(f"- {_economics_line(economic)}")
             lines.append("")
     return "\n".join(lines).strip() + "\n"
 
@@ -550,10 +608,10 @@ def _render_pdf_export(data: dict[str, Any]) -> bytes:
 
     for index, item in enumerate(hypotheses, start=1):
         values = _export_hypothesis_values(item, weights)
-        if y + 134 > 800:
+        if y + 164 > 800:
             add_page()
-        page.draw_rect(fitz.Rect(36, y, 559, y + 124), color=(0.86, 0.82, 0.73), fill=(1, 0.99, 0.96), width=0.6)
-        page.draw_rect(fitz.Rect(36, y, 41, y + 124), color=(0.88, 0.58, 0.18), fill=(0.88, 0.58, 0.18))
+        page.draw_rect(fitz.Rect(36, y, 559, y + 154), color=(0.86, 0.82, 0.73), fill=(1, 0.99, 0.96), width=0.6)
+        page.draw_rect(fitz.Rect(36, y, 41, y + 154), color=(0.88, 0.58, 0.18), fill=(0.88, 0.58, 0.18))
         page.insert_textbox(
             fitz.Rect(52, y + 12, 455, y + 42),
             f"{index}. {item.get('title') or 'Гипотеза'}",
@@ -570,8 +628,8 @@ def _render_pdf_export(data: dict[str, Any]) -> bytes:
             align=fitz.TEXT_ALIGN_RIGHT,
         )
         page.insert_textbox(
-            fitz.Rect(52, y + 45, 545, y + 86),
-            item.get("statement") or "",
+            fitz.Rect(52, y + 45, 545, y + 104),
+            _pdf_hypothesis_text(item),
             fontsize=9.5,
             fontname="helv",
             color=(0.18, 0.17, 0.15),
@@ -584,13 +642,13 @@ def _render_pdf_export(data: dict[str, Any]) -> bytes:
             f"risk {values['risk']:.0f}"
         )
         page.insert_textbox(
-            fitz.Rect(52, y + 92, 545, y + 114),
+            fitz.Rect(52, y + 122, 545, y + 144),
             metrics,
             fontsize=8.5,
             fontname="helv",
             color=(0.38, 0.35, 0.29),
         )
-        y += 138
+        y += 168
 
     payload = doc.tobytes(garbage=4, deflate=True)
     doc.close()
@@ -635,6 +693,42 @@ def _export_hypothesis_values(item: dict[str, Any], weights: dict[str, float]) -
 def _metric_for_export(value: Any) -> float:
     number = float(value or 0)
     return number * 100 if 0 < number <= 1 else number
+
+
+def _evidence_url_text(item: dict[str, Any]) -> str:
+    urls = [str(evidence.get("url")) for evidence in item.get("evidence") or [] if isinstance(evidence, dict) and evidence.get("url")]
+    return " ".join(urls)
+
+
+def _economics_export_text(economics: Any) -> str:
+    if not isinstance(economics, list):
+        return ""
+    return "; ".join(_economics_line(item) for item in economics if isinstance(item, dict))
+
+
+def _economics_line(item: dict[str, Any]) -> str:
+    parts = [
+        str(item.get("item") or "оценка"),
+        str(item.get("assumption") or ""),
+        str(item.get("calculation") or ""),
+        str(item.get("expected_effect") or ""),
+        str(item.get("data_needed") or ""),
+    ]
+    confidence = item.get("confidence")
+    if confidence:
+        parts.append(f"confidence={confidence}")
+    return " | ".join(part for part in parts if part)
+
+
+def _pdf_hypothesis_text(item: dict[str, Any]) -> str:
+    lines = [str(item.get("statement") or "")]
+    economics = _economics_export_text(item.get("economics"))
+    if economics:
+        lines.append(f"Economics: {economics[:240]}")
+    urls = _evidence_url_text(item)
+    if urls:
+        lines.append(f"Sources: {urls[:220]}")
+    return "\n".join(line for line in lines if line)
 
 
 def _md_cell(value: Any) -> str:

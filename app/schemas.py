@@ -27,6 +27,9 @@ class GenerateRequest(BaseModel):
     weights: dict[str, float] = Field(default_factory=dict)
     exclusions: list[str] = Field(default_factory=list)
     include_roadmap: bool = True
+    research_enabled: bool = False
+    research_query: str = Field(default="", max_length=2000)
+    research_sources: int = Field(default=6, ge=1, le=12)
 
 
 class ChatRequest(BaseModel):

@@ -32,16 +32,29 @@ class OpenAIService:
         weights: dict[str, float],
         exclusions: list[str],
         include_roadmap: bool,
+        research_context: dict[str, Any] | None = None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         if not self.enabled:
             raise OpenAIServiceError("OPENAI_API_KEY не задан. Генерация гипотез требует OpenAI API.")
 
-        prompt = _build_hypothesis_prompt(project, documents, graph, feedback, count, weights, exclusions, include_roadmap, self.settings.max_context_chars)
+        prompt = _build_hypothesis_prompt(
+            project,
+            documents,
+            graph,
+            feedback,
+            count,
+            weights,
+            exclusions,
+            include_roadmap,
+            self.settings.max_context_chars,
+            research_context=research_context,
+        )
         instructions = (
             "Ты исследовательский AI-agent для генерации научно-исследовательских гипотез в материаловедении, "
             "обогащении и металлургии. Формируй конкретные проверяемые гипотезы, не выдумывай источники, "
             "явно отделяй факты из контекста от допущений. Источники могут быть на русском, английском, "
             "китайском и других языках; корректно интерпретируй их, сохраняя исходные термины там, где они важны. "
+            "Если во входе есть блок web research, используй только реальные ссылки из него и не выдумывай URL. "
             "Ответ верни строго валидным JSON без markdown."
         )
         try:
@@ -54,6 +67,55 @@ class OpenAIService:
             return normalized, {"mode": "openai", "model": self.settings.openai_model}
         except Exception as exc:  # noqa: BLE001
             raise OpenAIServiceError(f"OpenAI generation failed ({exc.__class__.__name__}): {exc}") from exc
+
+    def research_topic(
+        self,
+        project: dict[str, Any],
+        documents: list[dict[str, Any]],
+        graph: dict[str, list[dict[str, Any]]],
+        query: str,
+        max_sources: int,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        if not self.enabled:
+            raise OpenAIServiceError("OPENAI_API_KEY не задан. Research требует OpenAI API.")
+
+        source_limit = max(1, min(max_sources or self.settings.openai_research_max_sources, 12))
+        research_query = (query or _default_research_query(project, graph)).strip()
+        prompt = _build_research_prompt(project, documents, graph, research_query, self.settings.max_context_chars)
+        instructions = (
+            "Ты research-agent для R&D проекта в обогащении, металлургии и материаловедении. "
+            "Используй web search для поиска актуальных научных статей, патентов, промышленных примеров и релевантных обзоров. "
+            "Пиши по-русски. Не выдавай ссылку как источник, если не нашел ее через web search. "
+            "Отделяй подтвержденные сведения от инженерных допущений."
+        )
+        try:
+            response = self._call_response(
+                instructions=instructions,
+                input_payload=prompt,
+                max_output_tokens=4500,
+                model=self.settings.openai_research_model,
+                tools=[{"type": "web_search"}],
+                tool_choice="required",
+                include=["web_search_call.action.sources"],
+            )
+            text = (getattr(response, "output_text", None) or _response_to_text(response)).strip()
+            if not text:
+                raise ValueError("OpenAI research returned empty text")
+            sources = _response_citations(response)[:source_limit]
+            return (
+                {
+                    "query": research_query,
+                    "summary": text[:14000],
+                    "sources": sources,
+                },
+                {
+                    "mode": "openai_web_search",
+                    "model": self.settings.openai_research_model,
+                    "sources": len(sources),
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise OpenAIServiceError(f"OpenAI research failed ({exc.__class__.__name__}): {exc}") from exc
 
     def extract_graph(self, document_text: str, source_id: str, source_name: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
         if not self.enabled or not self.settings.openai_graph_extraction or len(document_text.strip()) < 80:
@@ -242,6 +304,26 @@ class OpenAIService:
         return self._call_response_text(instructions=instructions, input_payload=prompt, max_output_tokens=max_output_tokens)
 
     def _call_response_text(self, instructions: str, input_payload: Any, max_output_tokens: int) -> str:
+        response = self._call_response(
+            instructions=instructions,
+            input_payload=input_payload,
+            max_output_tokens=max_output_tokens,
+        )
+        output_text = getattr(response, "output_text", None)
+        if output_text:
+            return str(output_text)
+        return _response_to_text(response)
+
+    def _call_response(
+        self,
+        instructions: str,
+        input_payload: Any,
+        max_output_tokens: int,
+        model: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        include: list[str] | None = None,
+    ) -> Any:
         from openai import OpenAI
 
         kwargs: dict[str, Any] = {
@@ -249,16 +331,19 @@ class OpenAIService:
             "base_url": self.settings.openai_base_url or "https://api.openai.com/v1",
         }
         client = OpenAI(**kwargs)
-        response = client.responses.create(
-            model=self.settings.openai_model,
-            instructions=instructions,
-            input=input_payload,
-            max_output_tokens=max_output_tokens,
-        )
-        output_text = getattr(response, "output_text", None)
-        if output_text:
-            return str(output_text)
-        return _response_to_text(response)
+        request: dict[str, Any] = {
+            "model": model or self.settings.openai_model,
+            "instructions": instructions,
+            "input": input_payload,
+            "max_output_tokens": max_output_tokens,
+        }
+        if tools:
+            request["tools"] = tools
+        if tool_choice is not None:
+            request["tool_choice"] = tool_choice
+        if include:
+            request["include"] = include
+        return client.responses.create(**request)
 
 
 def _build_hypothesis_prompt(
@@ -271,10 +356,12 @@ def _build_hypothesis_prompt(
     exclusions: list[str],
     include_roadmap: bool,
     max_chars: int,
+    research_context: dict[str, Any] | None = None,
 ) -> str:
     docs_context = _documents_context(documents, max_chars)
     graph_context = _graph_context(graph)
     feedback_context = _feedback_context(feedback)
+    research_text = _research_context_text(research_context)
     return f"""
 Проект: {project.get("name")}
 Домен: {project.get("domain")}
@@ -290,11 +377,19 @@ def _build_hypothesis_prompt(
 Сводка графа знаний:
 {graph_context}
 
+Актуальный web research:
+{research_text}
+
 Экспертный фидбэк:
 {feedback_context}
 
-Сгенерируй {count} гипотез. Каждая гипотеза должна быть проверяемой лабораторно, с механизмом, рисками,
-ожидаемой ценностью и источниками из контекста.
+Сгенерируй {count} гипотез как структурированные мини-отчеты для экспертного чтения.
+Каждая гипотеза должна быть проверяемой лабораторно, с механизмом, рисками, ожидаемой ценностью и источниками из контекста.
+Если web research включен, в описании гипотез подчеркни актуальную новизну относительно найденных статей,
+патентов или промышленных практик и добавь реальные URL в evidence.url.
+Отдельно выдели план внедрения в roadmap и возможные экономические расчеты в economics.
+Не оставляй roadmap и economics пустыми: если точных чисел нет, дай порядок оценки, формулу, допущения и какие данные нужно собрать.
+Ссылки без контекста запрещены: для каждого URL объясни, какой факт/патент/исследование он подтверждает и как это влияет на гипотезу.
 
 Критически важно для прозрачного ранжирования:
 - novelty, feasibility, impact и risk верни целыми числами от 0 до 100;
@@ -310,18 +405,56 @@ JSON-схема ответа:
     {{
       "title": "короткое название",
       "statement": "проверяемое утверждение в формате если/то",
-      "rationale": "обоснование",
-      "mechanism": "ожидаемый механизм влияния",
+      "rationale": "структурированное резюме: проблема, идея решения, ожидаемый технологический эффект, почему это не очевидный baseline",
+      "mechanism": "ожидаемый механизм влияния: физико-химическая, технологическая или организационная причинность",
       "novelty": 0,
       "feasibility": 0,
       "impact": 0,
       "risk": 0,
-      "uncertainty": "что неизвестно и как это влияет на доверие",
-      "evidence": [{{"source": "имя файла", "quote": "короткая цитата или пересказ", "why": "зачем источник релевантен"}}],
-      "roadmap": [{{"step": 1, "title": "шаг проверки", "output": "артефакт или критерий"}}]
+      "uncertainty": "ключевые неизвестные, риски интерпретации и какие измерения их снимут",
+      "evidence": [{{"source": "имя файла, статья или патент", "quote": "короткая цитата или пересказ", "why": "что именно подтверждает источник и почему это важно для гипотезы", "url": "https://..."}}],
+      "roadmap": [{{"step": 1, "title": "шаг проверки или внедрения", "output": "артефакт, критерий или gate", "owner": "лаборатория|технолог|экономист|производство"}}],
+      "economics": [{{"item": "показатель", "assumption": "допущение", "calculation": "формула или порядок оценки", "expected_effect": "диапазон эффекта", "confidence": "low|medium|high", "data_needed": "какие данные нужны для уточнения"}}]
     }}
   ]
 }}
+""".strip()
+
+
+def _build_research_prompt(
+    project: dict[str, Any],
+    documents: list[dict[str, Any]],
+    graph: dict[str, list[dict[str, Any]]],
+    query: str,
+    max_chars: int,
+) -> str:
+    return f"""
+Тема research:
+{query}
+
+Проект:
+- название: {project.get("name")}
+- домен: {project.get("domain")}
+- цель/KPI: {project.get("goal") or "не задано"}
+- ограничения: {project.get("constraints") or "не заданы"}
+
+Локальный контекст источников:
+{_documents_context(documents, max(4000, max_chars // 2))}
+
+Сводка локального графа знаний:
+{_graph_context(graph)}
+
+Задача:
+1. Найди актуальные внешние источники по теме: статьи, патенты, обзоры, промышленные кейсы, стандарты или данные производителей.
+2. Ищи по русским, английским и при необходимости китайским терминам.
+3. Сфокусируйся на том, что может усилить гипотезы: новизна, аналоги, ограничения, параметры внедрения, CAPEX/OPEX, ожидаемый эффект.
+4. Верни компактный research brief на русском языке с разделами:
+   - краткая картина области;
+   - что выглядит новым или мало проверенным;
+   - патенты/исследования/кейсы со ссылками;
+   - что встроить в гипотезы;
+   - возможные экономические вводные и ограничения.
+5. Для каждого важного источника укажи URL и почему он релевантен.
 """.strip()
 
 
@@ -397,6 +530,36 @@ def _feedback_context(feedback: list[dict[str, Any]]) -> str:
     )
 
 
+def _default_research_query(project: dict[str, Any], graph: dict[str, list[dict[str, Any]]]) -> str:
+    labels = [str(node.get("label") or "") for node in graph.get("nodes", [])[:14] if node.get("label")]
+    parts = [
+        str(project.get("domain") or "обогащение и металлургия"),
+        str(project.get("goal") or ""),
+        ", ".join(labels),
+    ]
+    return " ".join(part for part in parts if part).strip() or "актуальные исследования и патенты для R&D гипотез"
+
+
+def _research_context_text(research_context: dict[str, Any] | None) -> str:
+    if not research_context:
+        return "Не включен."
+    lines = [
+        f"Запрос: {research_context.get('query') or '-'}",
+        "",
+        str(research_context.get("summary") or "").strip(),
+    ]
+    sources = research_context.get("sources") if isinstance(research_context.get("sources"), list) else []
+    if sources:
+        lines.extend(["", "Найденные URL-источники:"])
+        for source in sources[:12]:
+            if not isinstance(source, dict):
+                continue
+            title = source.get("title") or source.get("url") or "source"
+            url = source.get("url") or ""
+            lines.append(f"- {title}: {url}")
+    return "\n".join(line for line in lines if line is not None).strip()
+
+
 def _normalize_hypothesis(item: dict[str, Any], weights: dict[str, float]) -> dict[str, Any]:
     scale_factor = _metric_scale_factor(
         [item.get("novelty"), item.get("feasibility"), item.get("impact"), item.get("risk")]
@@ -417,9 +580,70 @@ def _normalize_hypothesis(item: dict[str, Any], weights: dict[str, float]) -> di
         "risk": risk,
         "score": score,
         "uncertainty": str(item.get("uncertainty") or "")[:1200],
-        "evidence": item.get("evidence") if isinstance(item.get("evidence"), list) else [],
-        "roadmap": item.get("roadmap") if isinstance(item.get("roadmap"), list) else [],
+        "evidence": _normalize_evidence(item.get("evidence")),
+        "roadmap": _normalize_roadmap(item.get("roadmap")),
+        "economics": _normalize_economics(item.get("economics")),
     }
+
+
+def _normalize_evidence(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[dict[str, str]] = []
+    for raw in value[:8]:
+        if isinstance(raw, dict):
+            normalized.append(
+                {
+                    "source": str(raw.get("source") or raw.get("title") or "source")[:240],
+                    "quote": str(raw.get("quote") or "")[:700],
+                    "why": str(raw.get("why") or "")[:700],
+                    "url": str(raw.get("url") or "")[:1000],
+                    "kind": str(raw.get("kind") or raw.get("type") or "")[:80],
+                }
+            )
+        elif raw:
+            normalized.append({"source": "source", "quote": str(raw)[:700], "why": "", "url": ""})
+    return normalized
+
+
+def _normalize_roadmap(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for index, raw in enumerate(value[:8], start=1):
+        if isinstance(raw, dict):
+            normalized.append(
+                {
+                    "step": raw.get("step") or index,
+                    "title": str(raw.get("title") or "")[:300],
+                    "output": str(raw.get("output") or "")[:500],
+                    "owner": str(raw.get("owner") or "")[:120],
+                }
+            )
+        elif raw:
+            normalized.append({"step": index, "title": str(raw)[:300], "output": ""})
+    return normalized
+
+
+def _normalize_economics(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[dict[str, str]] = []
+    for raw in value[:6]:
+        if isinstance(raw, dict):
+            normalized.append(
+                {
+                    "item": str(raw.get("item") or raw.get("metric") or "оценка")[:240],
+                    "assumption": str(raw.get("assumption") or "")[:600],
+                    "calculation": str(raw.get("calculation") or "")[:700],
+                    "expected_effect": str(raw.get("expected_effect") or raw.get("value") or "")[:500],
+                    "confidence": str(raw.get("confidence") or "")[:80],
+                    "data_needed": str(raw.get("data_needed") or "")[:500],
+                }
+            )
+        elif raw:
+            normalized.append({"item": "оценка", "assumption": "", "calculation": str(raw)[:700], "expected_effect": "", "confidence": ""})
+    return normalized
 
 
 def _extract_json(text: str) -> dict[str, Any]:
@@ -452,6 +676,53 @@ def _response_to_text(response: Any) -> str:
     except Exception:  # noqa: BLE001
         pass
     return str(response)
+
+
+def _response_citations(response: Any) -> list[dict[str, str]]:
+    citations: list[dict[str, str]] = []
+
+    def add(url: Any, title: Any = "", text: Any = "") -> None:
+        url_text = str(url or "").strip()
+        if not url_text:
+            return
+        citations.append(
+            {
+                "url": url_text[:1000],
+                "title": str(title or url_text)[:300],
+                "text": str(text or "")[:500],
+            }
+        )
+
+    for item in _as_list(_get(response, "output")):
+        item_type = _get(item, "type")
+        if item_type == "web_search_call":
+            action = _get(item, "action")
+            for source in _as_list(_get(action, "sources")):
+                add(_get(source, "url"), _get(source, "title"))
+        for content in _as_list(_get(item, "content")):
+            for annotation in _as_list(_get(content, "annotations")):
+                if _get(annotation, "type") == "url_citation":
+                    add(_get(annotation, "url"), _get(annotation, "title"), _get(annotation, "text"))
+
+    unique: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for citation in citations:
+        key = citation["url"].split("#", 1)[0].strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(citation)
+    return unique
+
+
+def _get(value: Any, key: str, default: Any = None) -> Any:
+    if isinstance(value, dict):
+        return value.get(key, default)
+    return getattr(value, key, default)
+
+
+def _as_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
 
 
 def _metric_scale_factor(values: list[Any]) -> float:

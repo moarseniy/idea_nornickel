@@ -5,6 +5,7 @@ const state = {
   weights: { novelty: 0.25, feasibility: 0.25, impact: 0.35, risk: 0.15 },
   openHypothesisId: null,
   dockTab: "docs",
+  dockExpanded: false,
   graphKey: "",
   promptFiles: [],
 };
@@ -79,6 +80,10 @@ function bindEvents() {
   $$("[data-dock-tab]").forEach((button) => {
     button.addEventListener("click", () => setDockTab(button.dataset.dockTab));
   });
+  $("#dockExpandBtn")?.addEventListener("click", () => {
+    state.dockExpanded = !state.dockExpanded;
+    renderDockState();
+  });
 
   $("#promptFilesList").addEventListener("click", (event) => {
     const button = event.target.closest("[data-remove-prompt-file]");
@@ -117,7 +122,7 @@ function bindEvents() {
     }
 
     const card = event.target.closest(".hypothesis-card[data-hypothesis-id]");
-    if (!card || event.target.closest("button, input, textarea, select, form")) return;
+    if (!card || event.target.closest("button, input, textarea, select, form, a")) return;
     state.openHypothesisId = state.openHypothesisId === card.dataset.hypothesisId ? null : card.dataset.hypothesisId;
     renderHypotheses();
   });
@@ -281,6 +286,9 @@ async function generateHypotheses() {
       weights: state.weights,
       exclusions,
       include_roadmap: true,
+      research_enabled: Boolean($("#researchEnabledInput")?.checked),
+      research_query: $("#researchQueryInput")?.value.trim() || "",
+      research_sources: Number($("#researchSourcesInput")?.value || 6),
     };
     const payload = state.promptFiles.length
       ? await generateWithPromptFiles(requestPayload)
@@ -292,7 +300,7 @@ async function generateHypotheses() {
     state.promptFiles = [];
     renderPromptFiles();
     renderAll();
-    toast(payload.meta?.prompt_attachments ? `Гипотезы сгенерированы · вложений: ${payload.meta.prompt_attachments}` : "Гипотезы сгенерированы");
+    toast(generationToast(payload.meta));
   } catch (error) {
     toast(error.message);
   } finally {
@@ -307,6 +315,16 @@ async function generateWithPromptFiles(requestPayload) {
   if (ocrLanguages) form.append("ocr_languages", ocrLanguages);
   state.promptFiles.forEach((file) => form.append("files", file));
   return api(`/api/projects/${state.projectId}/generate-with-files`, { method: "POST", body: form });
+}
+
+function generationToast(meta = {}) {
+  const parts = ["Гипотезы сгенерированы"];
+  if (meta.prompt_attachments) parts.push(`вложений: ${meta.prompt_attachments}`);
+  if (meta.research?.enabled) {
+    const sourceCount = Array.isArray(meta.research.sources) ? meta.research.sources.length : Number(meta.research.sources || 0);
+    parts.push(`research: ${sourceCount} ссылок`);
+  }
+  return parts.join(" · ");
 }
 
 async function updateStatus(id, status) {
@@ -389,10 +407,20 @@ function renderDockState() {
   $$("[data-dock-panel]").forEach((panel) => {
     panel.hidden = panel.dataset.dockPanel !== state.dockTab;
   });
+  const expanded = state.dockTab === "chat" && state.dockExpanded;
+  $(".dock")?.classList.toggle("expanded", expanded);
+  $(".graph-stage")?.classList.toggle("dock-expanded", expanded);
+  const expandBtn = $("#dockExpandBtn");
+  if (expandBtn) {
+    expandBtn.hidden = state.dockTab !== "chat";
+    expandBtn.textContent = expanded ? "Свернуть" : "Развернуть";
+    expandBtn.classList.toggle("active", expanded);
+  }
 }
 
 function setDockTab(tab) {
   state.dockTab = tab || "docs";
+  if (state.dockTab === "chat") state.dockExpanded = true;
   renderDockState();
 }
 
@@ -479,6 +507,7 @@ function renderRuntime() {
   if (!runtime) return;
   badge.classList.toggle("ok", Boolean(runtime.openai_enabled));
   badge.textContent = runtime.openai_enabled ? `OpenAI · ${runtime.openai_model}` : "No API key";
+  badge.title = runtime.openai_research_model ? `Research: ${runtime.openai_research_model}` : "";
 }
 
 function renderDocuments() {
@@ -522,14 +551,9 @@ function renderHypothesis(item) {
     ["Эффект", item.impact],
     ["Риск", item.risk],
   ];
-  const evidence = (item.evidence || [])
-    .slice(0, 2)
-    .map((ev) => `<span><b>${escapeHtml(ev.source || "source")}</b>: ${escapeHtml(ev.quote || ev.why || "")}</span>`)
-    .join("");
-  const roadmap = (item.roadmap || [])
-    .slice(0, 3)
-    .map((step) => `<span>${escapeHtml(step.step || "")}. ${escapeHtml(step.title || "")} · ${escapeHtml(step.output || "")}</span>`)
-    .join("");
+  const evidence = renderEvidenceReport(item.evidence || []);
+  const roadmap = renderRoadmapReport(item.roadmap || []);
+  const economics = renderEconomicsReport(item.economics || []);
   const statuses = [
     ["draft", "Черновик"],
     ["review", "Проверка"],
@@ -553,9 +577,30 @@ function renderHypothesis(item) {
     ${
       isOpen
         ? `<div class="hypothesis-extra">
-            <div class="muted">${escapeHtml(item.mechanism || item.rationale || "")}</div>
-            ${evidence ? `<div class="evidence">${evidence}</div>` : ""}
-            ${roadmap ? `<div class="roadmap">${roadmap}</div>` : ""}
+            <section class="report-section">
+              <h4>Обоснование</h4>
+              <p>${escapeHtml(item.rationale || "Обоснование не сформировано для этой версии гипотезы.")}</p>
+            </section>
+            <section class="report-section">
+              <h4>Механизм</h4>
+              <p>${escapeHtml(item.mechanism || "Механизм не описан.")}</p>
+            </section>
+            <section class="report-section report-section-muted">
+              <h4>Неопределенности</h4>
+              <p>${escapeHtml(item.uncertainty || "Ключевые неопределенности не указаны.")}</p>
+            </section>
+            <section class="report-section">
+              <h4>План внедрения / проверки</h4>
+              ${roadmap}
+            </section>
+            <section class="report-section">
+              <h4>Экономический контур</h4>
+              ${economics}
+            </section>
+            <section class="report-section">
+              <h4>Источники и контекст ссылок</h4>
+              ${evidence}
+            </section>
             <div class="graph-actions">
               <button type="button" data-path-node="${escapeHtml(graphNode)}">Путь к KPI</button>
               <button type="button" data-focus-node="${escapeHtml(graphNode)}">Фокус в графе</button>
@@ -584,6 +629,58 @@ function renderHypothesis(item) {
         : ""
     }
   </article>`;
+}
+
+function renderEvidenceReport(items) {
+  if (!items.length) return `<div class="report-empty">Источники не указаны для этой версии гипотезы.</div>`;
+  return `<div class="evidence report-list">${items
+    .slice(0, 6)
+    .map((ev) => {
+      const url = safeExternalUrl(ev?.url);
+      const source = escapeHtml(ev?.source || "source");
+      const sourceHtml = url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${source}</a>` : `<b>${source}</b>`;
+      const quote = ev?.quote ? `<p>${escapeHtml(ev.quote)}</p>` : "";
+      const why = ev?.why ? `<small>${escapeHtml(ev.why)}</small>` : "";
+      return `<article>${sourceHtml}${quote}${why}</article>`;
+    })
+    .join("")}</div>`;
+}
+
+function renderRoadmapReport(items) {
+  if (!items.length) return `<div class="report-empty">План не сформирован. Для старых гипотез можно перегенерировать с текущим промптом.</div>`;
+  return `<div class="roadmap report-list">${items
+    .slice(0, 6)
+    .map((step, index) => {
+      const owner = step.owner ? `<em>${escapeHtml(step.owner)}</em>` : "";
+      return `<article>
+        <b>${escapeHtml(step.step || index + 1)}. ${escapeHtml(step.title || "Шаг")}</b>
+        ${owner}
+        <p>${escapeHtml(step.output || "")}</p>
+      </article>`;
+    })
+    .join("")}</div>`;
+}
+
+function renderEconomicsReport(items) {
+  if (!items.length) {
+    return `<div class="report-empty">Экономический расчет не сформирован. Новая генерация будет запрашивать формулу, допущения и данные для уточнения.</div>`;
+  }
+  return `<div class="economics report-list">${items
+    .slice(0, 5)
+    .map((economic) => {
+      const details = [
+        ["Допущение", economic?.assumption],
+        ["Расчет", economic?.calculation],
+        ["Эффект", economic?.expected_effect],
+        ["Данные", economic?.data_needed],
+        ["Доверие", economic?.confidence],
+      ]
+        .filter(([, value]) => String(value || "").trim())
+        .map(([label, value]) => `<span><b>${label}</b>${escapeHtml(value)}</span>`)
+        .join("");
+      return `<article><strong>${escapeHtml(economic?.item || "Оценка")}</strong>${details}</article>`;
+    })
+    .join("")}</div>`;
 }
 
 function renderEvents() {
@@ -1349,6 +1446,17 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function safeExternalUrl(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  try {
+    const url = new URL(text);
+    return ["http:", "https:"].includes(url.protocol) ? url.href : "";
+  } catch (_) {
+    return "";
+  }
 }
 
 function formatDate(value) {

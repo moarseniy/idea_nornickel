@@ -24,6 +24,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   height: 100%;
@@ -350,26 +354,96 @@ button {
 
 .hypothesis-extra {
   display: grid;
-  gap: 12px;
+  gap: 10px;
   padding-top: 12px;
   border-top: 1px solid var(--line);
 }
 
-.evidence,
-.roadmap {
+.report-section {
   display: grid;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.4;
+  gap: 8px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(15, 16, 15, 0.72);
 }
 
-.evidence span,
-.roadmap span {
-  padding: 8px 10px;
+.report-section h4 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.report-section p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.report-section-muted {
+  background: rgba(245, 240, 230, 0.025);
+}
+
+.report-list {
+  display: grid;
+  gap: 7px;
+}
+
+.report-list article,
+.report-empty {
+  padding: 9px 10px;
   border-radius: 8px;
   background: var(--panel-3);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+.report-list article {
+  display: grid;
+  gap: 4px;
+}
+
+.report-list b,
+.report-list strong {
+  color: rgba(245, 240, 230, 0.86);
+}
+
+.report-list small,
+.report-list em {
+  color: var(--faint);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.evidence a {
+  color: var(--gold);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.evidence a:hover {
+  text-decoration: underline;
+}
+
+.economics article {
+  border-left: 3px solid rgba(122, 168, 125, 0.52);
+}
+
+.economics article span {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.economics article span b {
+  color: var(--faint);
+  font-size: 11px;
 }
 
 .status-row,
@@ -538,6 +612,29 @@ select:focus {
   font-variant-numeric: tabular-nums;
 }
 
+.research-block {
+  grid-template-columns: minmax(0, 1fr) 104px;
+}
+
+.research-block .block-title,
+.research-block label:nth-of-type(1),
+.research-block label:nth-of-type(2) {
+  grid-column: 1 / -1;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.toggle-row input {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  accent-color: var(--gold);
+}
+
 .actions {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   border-bottom: 0;
@@ -610,6 +707,10 @@ knowledge-graph {
   inset: 0 0 var(--dock-height);
 }
 
+.graph-stage.dock-expanded {
+  --dock-height: min(64vh, 666px);
+}
+
 .graph-topline {
   position: absolute;
   top: 56px;
@@ -657,6 +758,10 @@ knowledge-graph {
   border-bottom: 1px solid var(--line);
 }
 
+.dock.expanded .dock-panel {
+  height: min(58vh, 620px);
+}
+
 .dock-panel[hidden] {
   display: none;
 }
@@ -695,6 +800,10 @@ knowledge-graph {
 .dock-tabs button.active {
   color: var(--ink);
   background: rgba(245, 240, 230, 0.05);
+}
+
+.dock-expand-button {
+  border: 1px solid var(--line);
 }
 
 .dock-tabs span,
@@ -794,7 +903,7 @@ knowledge-graph {
 }
 
 .message {
-  max-width: min(78%, 720px);
+  max-width: min(78%, 920px);
   padding: 9px 13px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -829,10 +938,15 @@ knowledge-graph {
 
 .chat-form textarea {
   min-height: 38px;
-  max-height: 120px;
+  max-height: 180px;
   border-radius: 999px;
   resize: none;
   padding: 10px 15px;
+}
+
+.dock.expanded .chat-form textarea {
+  min-height: 74px;
+  border-radius: 14px;
 }
 
 .empty {

@@ -110,6 +110,7 @@ class Database:
                     status TEXT NOT NULL DEFAULT 'draft',
                     evidence_json TEXT NOT NULL DEFAULT '[]',
                     roadmap_json TEXT NOT NULL DEFAULT '[]',
+                    economics_json TEXT NOT NULL DEFAULT '[]',
                     version_no INTEGER NOT NULL DEFAULT 1,
                     parent_id TEXT,
                     created_at TEXT NOT NULL,
@@ -154,6 +155,7 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_chat_project ON chat_messages(project_id, created_at);
                 """
             )
+            self._ensure_column(conn, "hypotheses", "economics_json", "TEXT NOT NULL DEFAULT '[]'")
 
     def create_project(self, payload: dict[str, Any], actor: str) -> dict[str, Any]:
         project_id = str(uuid.uuid4())
@@ -422,10 +424,10 @@ class Database:
                     """
                     INSERT INTO hypotheses (
                         id, project_id, title, statement, rationale, mechanism, novelty, feasibility,
-                        impact, risk, uncertainty, score, status, evidence_json, roadmap_json,
+                        impact, risk, uncertainty, score, status, evidence_json, roadmap_json, economics_json,
                         version_no, parent_id, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         hypothesis_id,
@@ -443,6 +445,7 @@ class Database:
                         str(item.get("status") or "draft"),
                         json_dumps(item.get("evidence") or []),
                         json_dumps(item.get("roadmap") or []),
+                        json_dumps(item.get("economics") or []),
                         version_no,
                         item.get("parent_id"),
                         now,
@@ -630,6 +633,11 @@ class Database:
             (event_id, project_id, version, actor, action, entity_type, entity_id, json_dumps(payload), utcnow()),
         )
 
+    def _ensure_column(self, conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+        columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
     def _project_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
         data = dict(row)
         data["team"] = json_loads(data.pop("team_json"), [])
@@ -662,6 +670,7 @@ class Database:
         data = dict(row)
         data["evidence"] = json_loads(data.pop("evidence_json"), [])
         data["roadmap"] = json_loads(data.pop("roadmap_json"), [])
+        data["economics"] = json_loads(data.pop("economics_json", "[]"), [])
         return data
 
     def _feedback_from_row(self, row: sqlite3.Row) -> dict[str, Any]:

@@ -40,6 +40,8 @@ class Settings:
     openai_model: str
     openai_base_url: str | None
     openai_graph_extraction: bool
+    openai_research_model: str
+    openai_research_max_sources: int
     log_level: str
     max_document_chars: int
     max_context_chars: int
@@ -78,6 +80,8 @@ def load_settings() -> Settings:
         openai_model=os.getenv("OPENAI_MODEL", "gpt-5.2").strip() or "gpt-5.2",
         openai_base_url=_normalize_base_url(os.getenv("OPENAI_BASE_URL")),
         openai_graph_extraction=_as_bool(os.getenv("OPENAI_GRAPH_EXTRACTION"), True),
+        openai_research_model=(os.getenv("OPENAI_RESEARCH_MODEL") or os.getenv("OPENAI_MODEL", "gpt-5.2")).strip() or "gpt-5.2",
+        openai_research_max_sources=_as_int(os.getenv("OPENAI_RESEARCH_MAX_SOURCES"), 8),
         log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO",
         max_document_chars=_as_int(os.getenv("MAX_DOCUMENT_CHARS"), 120_000),
         max_context_chars=_as_int(os.getenv("MAX_CONTEXT_CHARS"), 28_000),
