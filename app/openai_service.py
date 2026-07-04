@@ -132,7 +132,13 @@ class OpenAIService:
         except Exception as exc:  # noqa: BLE001
             return [], [], {"mode": "failed", "reason": str(exc)}
 
-    def describe_image(self, image_bytes: bytes, filename: str, content_type: str | None = None) -> tuple[str, dict[str, Any]]:
+    def describe_image(
+        self,
+        image_bytes: bytes,
+        filename: str,
+        content_type: str | None = None,
+        ocr_languages: list[str] | None = None,
+    ) -> tuple[str, dict[str, Any]]:
         if not self.enabled:
             return "", {"mode": "skipped", "reason": "OPENAI_API_KEY не задан"}
 
@@ -142,6 +148,7 @@ class OpenAIService:
 Проанализируй изображение как научно-технический источник для R&D проекта по обогащению и металлургии.
 
 Файл: {filename}
+Ожидаемые языки/письменности источника: {_vision_language_hint(ocr_languages)}
 
 Нужно извлечь максимум полезного текста и предметного смысла для дальнейшей генерации гипотез и графа знаний:
 - видимый текст может быть на русском, английском, китайском или другом языке;
@@ -180,7 +187,12 @@ class OpenAIService:
             ).strip()
             if not text:
                 raise ValueError("OpenAI image analysis returned empty text")
-            return text, {"mode": "openai_vision", "model": self.settings.openai_model, "content_type": mime_type}
+            return text, {
+                "mode": "openai_vision",
+                "model": self.settings.openai_model,
+                "content_type": mime_type,
+                "ocr_languages": ocr_languages or self.settings.pdf_ocr_languages,
+            }
         except Exception as exc:  # noqa: BLE001
             return "", {"mode": "failed", "model": self.settings.openai_model, "reason": str(exc)}
 
@@ -482,3 +494,17 @@ def _image_mime_type(filename: str, content_type: str | None) -> str:
     if guessed and guessed.startswith("image/"):
         return guessed
     return "image/png"
+
+
+def _vision_language_hint(languages: list[str] | None) -> str:
+    labels = {
+        "ru": "русский/кириллица",
+        "en": "английский/латиница",
+        "ch_sim": "китайский упрощенный",
+        "ch_tra": "китайский традиционный",
+        "de": "немецкий",
+        "fr": "французский",
+        "es": "испанский",
+    }
+    selected = [labels.get(language, language) for language in languages or []]
+    return ", ".join(selected) if selected else "авто: русский, английский, китайский; при необходимости другие языки"

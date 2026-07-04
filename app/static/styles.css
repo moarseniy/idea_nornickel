@@ -205,6 +205,10 @@ select:focus {
   border-bottom: 0;
 }
 
+.source-language-field {
+  grid-column: 1 / -1;
+}
+
 .actions .primary {
   grid-column: 1 / -1;
 }

@@ -79,6 +79,19 @@
         </div>
 
         <div class="control-block actions">
+          <label class="source-language-field">
+            <span>Язык источника</span>
+            <select id="sourceLanguageSelect">
+              <option value="">Авто · RU/EN/ZH</option>
+              <option value="ru,en">Русский</option>
+              <option value="en">English</option>
+              <option value="ch_sim,en">中文 简体</option>
+              <option value="ch_tra,en">中文 繁體</option>
+              <option value="de,en">Deutsch</option>
+              <option value="fr,en">Français</option>
+              <option value="es,en">Español</option>
+            </select>
+          </label>
           <input id="fileInput" type="file" accept=".pdf,.docx,.xlsx,.xlsm,.csv,.txt,.md,.png,.jpg,.jpeg" multiple hidden />
           <button id="uploadBtn" class="icon-text" type="button" title="Загрузить документы"><span>↑</span><b>Файлы</b></button>
           <button id="importBtn" class="icon-text" type="button" title="Импортировать папку data"><span>↧</span><b>data</b></button>

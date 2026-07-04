@@ -172,6 +172,8 @@ async function uploadFiles(event) {
     for (const file of files) {
       const form = new FormData();
       form.append("file", file);
+      const ocrLanguages = $("#sourceLanguageSelect").value;
+      if (ocrLanguages) form.append("ocr_languages", ocrLanguages);
       await api(`/api/projects/${state.projectId}/documents`, { method: "POST", body: form });
     }
     await loadState();
@@ -190,7 +192,11 @@ async function importSamples() {
   try {
     const payload = await api(`/api/projects/${state.projectId}/documents/import-samples`, {
       method: "POST",
-      json: { max_files: 12, extensions: [".png", ".jpg", ".jpeg", ".docx", ".xlsx", ".pdf"] },
+      json: {
+        max_files: 12,
+        extensions: [".png", ".jpg", ".jpeg", ".docx", ".xlsx", ".pdf"],
+        ocr_languages: selectedSourceLanguages(),
+      },
     });
     await loadState();
     toast(`Импортировано: ${payload.imported.length}`);
@@ -199,6 +205,14 @@ async function importSamples() {
   } finally {
     setBusy(false);
   }
+}
+
+function selectedSourceLanguages() {
+  const value = $("#sourceLanguageSelect")?.value || "";
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 async function generateHypotheses() {

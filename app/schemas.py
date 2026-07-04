@@ -46,3 +46,4 @@ class StatusUpdate(BaseModel):
 class SampleImportRequest(BaseModel):
     max_files: int = Field(default=12, ge=1, le=20)
     extensions: list[str] = Field(default_factory=lambda: [".png", ".jpg", ".jpeg", ".docx", ".xlsx", ".pdf", ".txt", ".md", ".csv"])
+    ocr_languages: list[str] | None = None

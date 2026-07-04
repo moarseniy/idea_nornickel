@@ -8,14 +8,14 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.db import Database
-from app.document_parser import SUPPORTED_EXTENSIONS, parse_document, safe_filename
+from app.document_parser import SUPPORTED_EXTENSIONS, normalize_ocr_languages, parse_document, safe_filename
 from app.knowledge import graph_from_hypothesis, heuristic_graph_from_text
 from app.openai_service import OpenAIService, OpenAIServiceError
 from app.schemas import (
@@ -148,6 +148,7 @@ def project_state(project_id: str) -> dict[str, Any]:
 async def upload_document(
     project_id: str,
     file: UploadFile = File(...),
+    ocr_languages: str | None = Form(default=None),
     x_user: str | None = Header(default=None, alias="X-User"),
 ) -> dict[str, Any]:
     _require_project(project_id)
@@ -160,6 +161,7 @@ async def upload_document(
         content_type=file.content_type or "application/octet-stream",
         data=data,
         actor=_actor(x_user),
+        ocr_languages=_request_ocr_languages(ocr_languages),
     )
     return result
 
@@ -198,6 +200,7 @@ def import_samples(
                 content_type=content_type,
                 data=path.read_bytes(),
                 actor=actor,
+                ocr_languages=_request_ocr_languages(payload.ocr_languages),
             )
             imported.append(result["document"])
         except Exception as exc:  # noqa: BLE001
@@ -359,22 +362,24 @@ def _ingest_document_bytes(
     content_type: str,
     data: bytes,
     actor: str,
+    ocr_languages: list[str] | None = None,
 ) -> dict[str, Any]:
     display_name = safe_filename(filename)
+    selected_ocr_languages = ocr_languages or settings.pdf_ocr_languages
     parsed = parse_document(
         display_name,
         content_type,
         data,
         settings.max_document_chars,
         pdf_ocr_enabled=settings.pdf_ocr_enabled,
-        pdf_ocr_languages=settings.pdf_ocr_languages,
+        pdf_ocr_languages=selected_ocr_languages,
         pdf_ocr_model_dir=settings.pdf_ocr_model_dir,
         pdf_ocr_min_chars=settings.pdf_ocr_min_chars,
         pdf_text_layer_min_chars=settings.pdf_text_layer_min_chars,
         pdf_render_dpi=settings.pdf_render_dpi,
         pdf_vision_max_pages=settings.pdf_vision_max_pages,
     )
-    vision_meta = _enrich_vision_images(parsed)
+    vision_meta = _enrich_vision_images(parsed, selected_ocr_languages)
     upload_dir = settings.uploads_dir / project_id
     upload_dir.mkdir(parents=True, exist_ok=True)
     stored_name = f"{uuid.uuid4().hex}_{display_name}"
@@ -403,14 +408,14 @@ def _ingest_document_bytes(
     return {"document": document, "graph_update": graph_update, "extractor": extractor_meta, "vision": vision_meta}
 
 
-def _enrich_vision_images(parsed: Any) -> dict[str, Any]:
+def _enrich_vision_images(parsed: Any, ocr_languages: list[str]) -> dict[str, Any]:
     if not parsed.vision_images:
         return {"mode": "not_needed", "count": 0}
 
     items: list[dict[str, Any]] = []
     vision_chunks: list[str] = []
     for image in parsed.vision_images:
-        vision_text, vision_meta = ai.describe_image(image.data, image.label, image.content_type)
+        vision_text, vision_meta = ai.describe_image(image.data, image.label, image.content_type, ocr_languages=ocr_languages)
         item_meta = {
             "label": image.label,
             "reason": image.reason,
@@ -441,6 +446,11 @@ def _enrich_vision_images(parsed: Any) -> dict[str, Any]:
         parsed.text = combined
         parsed.metadata["chars"] = len(parsed.text)
     return vision_summary
+
+
+def _request_ocr_languages(value: str | list[str] | None) -> list[str] | None:
+    languages = normalize_ocr_languages(value, default=[])
+    return languages or None
 
 
 def _ordered_sample_paths(paths: list[Path]) -> list[Path]:

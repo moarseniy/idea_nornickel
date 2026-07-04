@@ -54,6 +54,8 @@ def parse_document(
         "extension": extension,
         "bytes": len(data),
     }
+    selected_ocr_languages = normalize_ocr_languages(pdf_ocr_languages, default=["ru", "en", "ch_sim"])
+    metadata["requested_ocr_languages"] = selected_ocr_languages
     vision_images: list[VisionImage] = []
 
     if extension in {".txt", ".md"}:
@@ -65,7 +67,7 @@ def parse_document(
             filename=filename,
             data=data,
             ocr_enabled=pdf_ocr_enabled,
-            ocr_languages=pdf_ocr_languages or ["ru", "en", "ch_sim"],
+            ocr_languages=selected_ocr_languages,
             ocr_model_dir=pdf_ocr_model_dir,
             ocr_min_chars=pdf_ocr_min_chars,
             text_layer_min_chars=pdf_text_layer_min_chars,
@@ -371,13 +373,7 @@ def _ocr_image_with_group(image_bytes: bytes, languages: list[str], model_dir: P
 
 
 def _ocr_language_groups(languages: list[str]) -> list[list[str]]:
-    normalized = []
-    for language in languages:
-        code = _normalize_ocr_language_code(language)
-        if code and code not in normalized:
-            normalized.append(code)
-    if not normalized:
-        normalized = ["ru", "en", "ch_sim"]
+    normalized = normalize_ocr_languages(languages, default=["ru", "en", "ch_sim"])
     if "en" not in normalized:
         normalized.append("en")
 
@@ -389,6 +385,19 @@ def _ocr_language_groups(languages: list[str]) -> list[list[str]]:
         if chinese_code in normalized:
             groups.append(_dedupe_languages([chinese_code, "en"]))
     return groups
+
+
+def normalize_ocr_languages(languages: list[str] | str | None, default: list[str] | None = None) -> list[str]:
+    if isinstance(languages, str):
+        raw_languages = re.split(r"[,;\s]+", languages)
+    else:
+        raw_languages = languages or []
+    normalized: list[str] = []
+    for language in raw_languages:
+        code = _normalize_ocr_language_code(str(language))
+        if code and code not in normalized:
+            normalized.append(code)
+    return normalized or list(default or [])
 
 
 def _normalize_ocr_language_code(language: str) -> str:
