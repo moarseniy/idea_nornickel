@@ -1507,7 +1507,9 @@ function openExport(type) {
 }
 
 function setBusy(value) {
-  $("#busyIndicator").hidden = !value;
+  const indicator = $("#busyIndicator");
+  indicator.hidden = !value;
+  indicator.setAttribute("aria-busy", String(Boolean(value)));
 }
 
 function toast(message) {

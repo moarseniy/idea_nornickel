@@ -249,13 +249,52 @@ button {
 }
 
 .busy {
-  padding: 7px 12px;
-  border-radius: 999px;
+  min-width: 128px;
+  display: grid;
+  gap: 5px;
+  padding: 7px 10px 8px;
+  border-radius: 10px;
   background: rgba(224, 152, 48, 0.12);
   color: var(--gold);
   font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
+}
+
+.busy-progress {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(224, 152, 48, 0.16);
+}
+
+.busy-progress::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 46%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, var(--gold), transparent);
+  animation: busy-progress 1.15s ease-in-out infinite;
+}
+
+@keyframes busy-progress {
+  from {
+    transform: translateX(-120%);
+  }
+  to {
+    transform: translateX(260%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .busy-progress::before {
+    animation: none;
+    transform: translateX(58%);
+  }
 }
 
 .hypotheses-list {
