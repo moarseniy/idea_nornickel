@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hypothesis Lab</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark">HL</span>
+          <div>
+            <strong>Hypothesis Lab</strong>
+            <small>R&D workspace</small>
+          </div>
+        </div>
+        <select id="projectSelect" class="project-select" aria-label="Проект"></select>
+        <button id="newProjectBtn" class="icon-text" title="Создать проект"><span>+</span><b>Проект</b></button>
+        <div class="runtime" id="runtimeBadge">API</div>
+        <label class="actor-field">
+          <span>Участник</span>
+          <input id="actorInput" autocomplete="off" />
+        </label>
+      </header>
+
+      <aside class="sidebar">
+        <form id="projectForm" class="project-form">
+          <label>
+            <span>Название</span>
+            <input id="projectName" name="name" />
+          </label>
+          <label>
+            <span>Домен</span>
+            <input id="projectDomain" name="domain" />
+          </label>
+          <label>
+            <span>Цель / KPI</span>
+            <textarea id="projectGoal" name="goal" rows="4"></textarea>
+          </label>
+          <label>
+            <span>Ограничения</span>
+            <textarea id="projectConstraints" name="constraints" rows="5"></textarea>
+          </label>
+          <button class="primary" type="submit"><span>✓</span><b>Сохранить</b></button>
+        </form>
+
+        <div class="control-block">
+          <div class="block-title">Экспертная настройка</div>
+          <label class="range-row">
+            <span>Новизна</span>
+            <input data-weight="novelty" type="range" min="0" max="1" step="0.05" />
+            <output id="weightNovelty">0.25</output>
+          </label>
+          <label class="range-row">
+            <span>Реализуемость</span>
+            <input data-weight="feasibility" type="range" min="0" max="1" step="0.05" />
+            <output id="weightFeasibility">0.25</output>
+          </label>
+          <label class="range-row">
+            <span>Эффект</span>
+            <input data-weight="impact" type="range" min="0" max="1" step="0.05" />
+            <output id="weightImpact">0.35</output>
+          </label>
+          <label class="range-row">
+            <span>Риск</span>
+            <input data-weight="risk" type="range" min="0" max="1" step="0.05" />
+            <output id="weightRisk">0.15</output>
+          </label>
+          <label>
+            <span>Исключить</span>
+            <input id="exclusionsInput" placeholder="например: цианирование, CAPEX" />
+          </label>
+          <label>
+            <span>Количество</span>
+            <input id="countInput" type="number" min="1" max="10" value="5" />
+          </label>
+        </div>
+
+        <div class="control-block actions">
+          <input id="fileInput" type="file" multiple hidden />
+          <button id="uploadBtn" class="icon-text" type="button" title="Загрузить документы"><span>↑</span><b>Файлы</b></button>
+          <button id="importBtn" class="icon-text" type="button" title="Импортировать папку data"><span>↧</span><b>data</b></button>
+          <button id="generateBtn" class="primary" type="button" title="Сгенерировать гипотезы"><span>✦</span><b>Генерация</b></button>
+          <button id="exportJsonBtn" class="icon-text" type="button" title="Экспорт JSON"><span>{ }</span><b>JSON</b></button>
+          <button id="exportCsvBtn" class="icon-text" type="button" title="Экспорт CSV"><span>⇥</span><b>CSV</b></button>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <section class="hypothesis-surface">
+          <div class="surface-head">
+            <div>
+              <h1>Гипотезы</h1>
+              <p id="projectMeta">0 источников · 0 гипотез</p>
+            </div>
+            <div id="busyIndicator" class="busy" hidden>Выполняется</div>
+          </div>
+          <div id="hypothesesList" class="hypotheses-list"></div>
+        </section>
+
+        <section class="graph-surface">
+          <div class="surface-head compact">
+            <h2>Граф знаний</h2>
+            <div class="graph-head-tools">
+              <div id="graphStats"></div>
+              <button id="graphZoomOut" class="tool-button" type="button" title="Уменьшить">−</button>
+              <button id="graphZoomIn" class="tool-button" type="button" title="Увеличить">+</button>
+              <button id="graphFit" class="tool-button" type="button" title="По центру">⌂</button>
+            </div>
+          </div>
+          <div class="graph-canvas">
+            <svg id="graphSvg" role="img" aria-label="Граф знаний"></svg>
+            <aside id="graphDetails" class="graph-details" hidden></aside>
+          </div>
+        </section>
+
+        <section class="side-surface">
+          <div class="documents-pane">
+            <div class="surface-head compact">
+              <h2>Источники</h2>
+              <span id="documentCount">0</span>
+            </div>
+            <div id="documentsList" class="documents-list"></div>
+          </div>
+
+          <div class="chat-pane">
+            <div class="surface-head compact">
+              <h2>Чат</h2>
+            </div>
+            <div id="chatLog" class="chat-log"></div>
+            <form id="chatForm" class="chat-form">
+              <textarea id="chatInput" rows="3" placeholder="Корректировка, вопрос или экспертная оценка"></textarea>
+              <button class="primary" title="Отправить"><span>↵</span><b>Отправить</b></button>
+            </form>
+          </div>
+
+          <div class="timeline-pane">
+            <div class="surface-head compact">
+              <h2>Версии</h2>
+            </div>
+            <div id="eventsList" class="events-list"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,27 @@
+services:
+  hypothesis-lab:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      APP_NAME: ${APP_NAME:-Hypothesis Lab}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.2}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_GRAPH_EXTRACTION: ${OPENAI_GRAPH_EXTRACTION:-true}
+      STORAGE_DIR: /app/storage
+      DATABASE_PATH: /app/storage/hypothesis_lab.db
+      UPLOADS_DIR: /app/storage/uploads
+      SAMPLE_DATA_DIR: /app/data
+      MAX_DOCUMENT_CHARS: ${MAX_DOCUMENT_CHARS:-120000}
+      MAX_CONTEXT_CHARS: ${MAX_CONTEXT_CHARS:-28000}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-36700160}
+    volumes:
+      - ./storage:/app/storage
+      - ./data:/app/data:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health').read()"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
