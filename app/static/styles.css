@@ -75,22 +75,52 @@ button {
 
 .brand {
   display: flex;
-  align-items: baseline;
-  gap: 12px;
-  min-width: 260px;
+  align-items: center;
+  gap: 10px;
+  min-width: 360px;
+}
+
+.brand-bulb {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(224, 152, 48, 0.3);
+  border-radius: 999px;
+  background: rgba(224, 152, 48, 0.12);
+  font-size: 16px;
+}
+
+.brand-text {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
 }
 
 .brand strong {
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 750;
   white-space: nowrap;
+  line-height: 1;
 }
 
 .brand strong span {
   color: var(--gold);
 }
 
-.brand small,
+.brand small {
+  min-width: 0;
+  max-width: 310px;
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .eyebrow {
   color: var(--faint);
   font-size: 11px;
@@ -553,6 +583,48 @@ button {
   border-bottom: 1px solid var(--line);
 }
 
+.settings-tabs {
+  position: sticky;
+  top: 45px;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(20, 20, 17, 0.98);
+}
+
+.settings-tabs button {
+  min-width: 0;
+  min-height: 31px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-3);
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 760;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-tabs button.active {
+  border-color: rgba(224, 152, 48, 0.38);
+  background: rgba(224, 152, 48, 0.14);
+  color: var(--ink);
+}
+
+.settings-panel {
+  min-width: 0;
+}
+
+.settings-panel .project-form,
+.settings-panel .control-block:last-child {
+  border-bottom: 0;
+}
+
 .block-title {
   color: var(--ink);
   font-size: 13px;
@@ -635,7 +707,11 @@ select:focus {
   accent-color: var(--gold);
 }
 
-.actions {
+.source-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.export-actions {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   border-bottom: 0;
 }
@@ -1025,6 +1101,11 @@ knowledge-graph {
     flex: 1 1 220px;
   }
 
+  .brand {
+    flex: 1 1 320px;
+    min-width: 0;
+  }
+
   .app-body {
     display: grid;
     grid-template-columns: 1fr;
@@ -1055,7 +1136,9 @@ knowledge-graph {
   }
 
   .head-actions,
-  .actions,
+  .source-actions,
+  .export-actions,
+  .settings-tabs,
   .metrics,
   .documents-list,
   .events-list,

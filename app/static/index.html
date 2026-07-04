@@ -3,15 +3,18 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Hypothesis Lab</title>
+    <title>IDEA</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
     <div class="app-shell">
       <header class="topbar">
-        <div class="brand" aria-label="Hypothesis Lab">
-          <strong>Hypothesis Lab<span>.</span></strong>
-          <small>R&amp;D workspace</small>
+        <div class="brand" aria-label="IDEA - Intelligent Discovery & Evaluation Assistant">
+          <span class="brand-bulb" aria-hidden="true">💡</span>
+          <div class="brand-text">
+            <strong>IDEA<span>.</span></strong>
+            <small>Intelligent Discovery &amp; Evaluation Assistant</small>
+          </div>
         </div>
 
         <div class="project-switcher">
@@ -47,100 +50,118 @@
 
           <details class="control-drawer" open>
             <summary>
-              <span>Проект и источники</span>
+              <span>Рабочие настройки</span>
               <b>Настройки</b>
             </summary>
 
-            <form id="projectForm" class="project-form">
-              <label>
-                <span>Название</span>
-                <input id="projectName" name="name" />
-              </label>
-              <label>
-                <span>Домен</span>
-                <input id="projectDomain" name="domain" />
-              </label>
-              <label>
-                <span>Цель / KPI</span>
-                <textarea id="projectGoal" name="goal" rows="3"></textarea>
-              </label>
-              <label>
-                <span>Ограничения</span>
-                <textarea id="projectConstraints" name="constraints" rows="3"></textarea>
-              </label>
-              <button class="secondary" type="submit"><span>✓</span><b>Сохранить проект</b></button>
-            </form>
-
-            <div class="control-block">
-              <div class="block-title">Скоринг</div>
-              <label class="range-row">
-                <span>Новизна</span>
-                <input data-weight="novelty" type="range" min="0" max="1" step="0.05" />
-                <output id="weightNovelty">0.25</output>
-              </label>
-              <label class="range-row">
-                <span>Реализуемость</span>
-                <input data-weight="feasibility" type="range" min="0" max="1" step="0.05" />
-                <output id="weightFeasibility">0.25</output>
-              </label>
-              <label class="range-row">
-                <span>Эффект</span>
-                <input data-weight="impact" type="range" min="0" max="1" step="0.05" />
-                <output id="weightImpact">0.35</output>
-              </label>
-              <label class="range-row">
-                <span>Риск</span>
-                <input data-weight="risk" type="range" min="0" max="1" step="0.05" />
-                <output id="weightRisk">0.15</output>
-              </label>
-              <label>
-                <span>Исключить</span>
-                <input id="exclusionsInput" placeholder="например: цианирование, CAPEX" />
-              </label>
-              <label>
-                <span>Количество</span>
-                <input id="countInput" type="number" min="1" max="10" value="5" />
-              </label>
+            <div class="settings-tabs" role="tablist" aria-label="Разделы настроек">
+              <button class="active" data-settings-tab="project" type="button" role="tab">Проект</button>
+              <button data-settings-tab="generation" type="button" role="tab">Генерация</button>
+              <button data-settings-tab="sources" type="button" role="tab">Источники</button>
+              <button data-settings-tab="export" type="button" role="tab">Экспорт</button>
             </div>
 
-            <div class="control-block research-block">
-              <div class="block-title">Research</div>
-              <label class="toggle-row">
-                <input id="researchEnabledInput" type="checkbox" />
-                <span>Web search</span>
-              </label>
-              <label>
-                <span>Тема</span>
-                <textarea id="researchQueryInput" rows="2" placeholder="оставьте пустым для авто-темы из KPI и графа"></textarea>
-              </label>
-              <label>
-                <span>Источников</span>
-                <input id="researchSourcesInput" type="number" min="1" max="12" value="6" />
-              </label>
+            <div class="settings-panel" data-settings-panel="project" role="tabpanel">
+              <form id="projectForm" class="project-form">
+                <label>
+                  <span>Название</span>
+                  <input id="projectName" name="name" />
+                </label>
+                <label>
+                  <span>Домен</span>
+                  <input id="projectDomain" name="domain" />
+                </label>
+                <label>
+                  <span>Цель / KPI</span>
+                  <textarea id="projectGoal" name="goal" rows="3"></textarea>
+                </label>
+                <label>
+                  <span>Ограничения</span>
+                  <textarea id="projectConstraints" name="constraints" rows="3"></textarea>
+                </label>
+                <button class="secondary" type="submit"><span>✓</span><b>Сохранить проект</b></button>
+              </form>
             </div>
 
-            <div class="control-block actions">
-              <label class="source-language-field">
-                <span>Язык источника</span>
-                <select id="sourceLanguageSelect">
-                  <option value="">Авто · RU/EN/CN</option>
-                  <option value="ru,en">Русский</option>
-                  <option value="en">English</option>
-                  <option value="ch_sim,en">中文 简体</option>
-                  <option value="ch_tra,en">中文 繁體</option>
-                  <option value="de,en">Deutsch</option>
-                  <option value="fr,en">Français</option>
-                  <option value="es,en">Español</option>
-                </select>
-              </label>
-              <input id="fileInput" type="file" accept=".pdf,.docx,.xlsx,.xlsm,.csv,.txt,.md,.png,.jpg,.jpeg" multiple hidden />
-              <input id="promptFileInput" type="file" accept=".pdf,.docx,.xlsx,.xlsm,.csv,.txt,.md,.png,.jpg,.jpeg" multiple hidden />
-              <button id="uploadBtn" class="secondary" type="button" title="Загрузить источники в граф знаний"><span>↑</span><b>В граф</b></button>
-              <button id="promptFilesBtn" class="secondary" type="button" title="Прикрепить файлы только к следующей генерации"><span>＋</span><b>Файлы к промпту</b></button>
-              <div id="promptFilesList" class="prompt-files-list"></div>
-              <button id="exportCsvBtn" class="secondary" type="button" title="Экспорт CSV"><span>↓</span><b>CSV</b></button>
-              <button id="exportMdBtn" class="secondary" type="button" title="Экспорт Markdown"><span>↓</span><b>Markdown</b></button>
-              <button id="exportPdfBtn" class="secondary" type="button" title="Экспорт PDF"><span>↓</span><b>PDF</b></button>
+            <div class="settings-panel" data-settings-panel="generation" role="tabpanel" hidden>
+              <div class="control-block">
+                <div class="block-title">Скоринг</div>
+                <label class="range-row">
+                  <span>Новизна</span>
+                  <input data-weight="novelty" type="range" min="0" max="1" step="0.05" />
+                  <output id="weightNovelty">0.25</output>
+                </label>
+                <label class="range-row">
+                  <span>Реализуемость</span>
+                  <input data-weight="feasibility" type="range" min="0" max="1" step="0.05" />
+                  <output id="weightFeasibility">0.25</output>
+                </label>
+                <label class="range-row">
+                  <span>Эффект</span>
+                  <input data-weight="impact" type="range" min="0" max="1" step="0.05" />
+                  <output id="weightImpact">0.35</output>
+                </label>
+                <label class="range-row">
+                  <span>Риск</span>
+                  <input data-weight="risk" type="range" min="0" max="1" step="0.05" />
+                  <output id="weightRisk">0.15</output>
+                </label>
+                <label>
+                  <span>Исключить</span>
+                  <input id="exclusionsInput" placeholder="например: цианирование, CAPEX" />
+                </label>
+                <label>
+                  <span>Количество</span>
+                  <input id="countInput" type="number" min="1" max="10" value="5" />
+                </label>
+              </div>
+
+              <div class="control-block research-block">
+                <div class="block-title">Research</div>
+                <label class="toggle-row">
+                  <input id="researchEnabledInput" type="checkbox" />
+                  <span>Web search</span>
+                </label>
+                <label>
+                  <span>Тема</span>
+                  <textarea id="researchQueryInput" rows="2" placeholder="оставьте пустым для авто-темы из KPI и графа"></textarea>
+                </label>
+                <label>
+                  <span>Источников</span>
+                  <input id="researchSourcesInput" type="number" min="1" max="12" value="6" />
+                </label>
+              </div>
+            </div>
+
+            <div class="settings-panel" data-settings-panel="sources" role="tabpanel" hidden>
+              <div class="control-block source-actions">
+                <label class="source-language-field">
+                  <span>Язык источника</span>
+                  <select id="sourceLanguageSelect">
+                    <option value="">Авто · RU/EN/CN</option>
+                    <option value="ru,en">Русский</option>
+                    <option value="en">English</option>
+                    <option value="ch_sim,en">中文 简体</option>
+                    <option value="ch_tra,en">中文 繁體</option>
+                    <option value="de,en">Deutsch</option>
+                    <option value="fr,en">Français</option>
+                    <option value="es,en">Español</option>
+                  </select>
+                </label>
+                <input id="fileInput" type="file" accept=".pdf,.docx,.xlsx,.xlsm,.csv,.txt,.md,.png,.jpg,.jpeg" multiple hidden />
+                <input id="promptFileInput" type="file" accept=".pdf,.docx,.xlsx,.xlsm,.csv,.txt,.md,.png,.jpg,.jpeg" multiple hidden />
+                <button id="uploadBtn" class="secondary" type="button" title="Загрузить источники в граф знаний"><span>↑</span><b>В граф</b></button>
+                <button id="promptFilesBtn" class="secondary" type="button" title="Прикрепить файлы только к следующей генерации"><span>＋</span><b>К промпту</b></button>
+                <div id="promptFilesList" class="prompt-files-list"></div>
+              </div>
+            </div>
+
+            <div class="settings-panel" data-settings-panel="export" role="tabpanel" hidden>
+              <div class="control-block export-actions">
+                <button id="exportCsvBtn" class="secondary" type="button" title="Экспорт CSV"><span>↓</span><b>CSV</b></button>
+                <button id="exportMdBtn" class="secondary" type="button" title="Экспорт Markdown"><span>↓</span><b>Markdown</b></button>
+                <button id="exportPdfBtn" class="secondary" type="button" title="Экспорт PDF"><span>↓</span><b>PDF</b></button>
+              </div>
             </div>
           </details>
         </aside>
@@ -191,7 +212,7 @@
     </div>
 
     <div id="toast" class="toast" hidden></div>
-    <script src="/static/graph-engine.js"></script>
-    <script src="/static/app.js"></script>
+    <script src="/static/graph-engine.js?v=20260704-idea-settings-tabs"></script>
+    <script src="/static/app.js?v=20260704-idea-settings-tabs"></script>
   </body>
 </html>

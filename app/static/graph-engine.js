@@ -39,12 +39,18 @@
     .tool:active { transform:scale(0.94); }
     .spacer { flex:1; pointer-events:none; }
     .hint { font:500 11px 'Onest',sans-serif; color:rgba(245,240,230,0.3); background:rgba(23,20,15,0.85); border-radius:999px; padding:7px 12px; white-space:nowrap; pointer-events:none !important; }
-    .chips { position:absolute; left:14px; bottom:14px; display:flex; flex-wrap:wrap; gap:6px; max-width:calc(100% - 200px); }
+    .legend-toggle { position:absolute; top:58px; right:14px; z-index:4; height:32px; display:flex; align-items:center; gap:7px; padding:0 12px; border:1px solid rgba(245,240,230,0.08); border-radius:999px; background:rgba(23,20,15,0.92); color:rgba(245,240,230,0.68); font:700 11px/1 'Onest',sans-serif; cursor:pointer; }
+    .legend-toggle i { position:relative; width:27px; height:7px; flex:none; border-radius:99px; background:transparent; }
+    .legend-toggle i::before { content:""; position:absolute; inset:0 auto auto 0; width:7px; height:7px; border-radius:99px; background:#E09830; box-shadow:10px 0 0 #F5F0E6,20px 0 0 #C9AC80; }
+    .legend-toggle.on { color:#F5F0E6; border-color:rgba(224,152,48,0.34); }
+    .chips { position:absolute; top:96px; right:14px; z-index:3; width:220px; display:grid; gap:6px; max-height:210px; overflow:auto; padding:10px; border:1px solid rgba(245,240,230,0.08); border-radius:14px; background:rgba(14,13,11,0.88); backdrop-filter:blur(8px); transition:opacity 160ms, transform 160ms cubic-bezier(0.16,1,0.3,1); }
+    .chips.hide { opacity:0; transform:translateY(-4px); pointer-events:none; }
+    .legend-title { color:rgba(245,240,230,0.34); font:700 10px/1 'Onest',sans-serif; text-transform:uppercase; }
     .chip { display:flex; align-items:center; gap:6px; background:rgba(23,20,15,0.92); border:1px solid rgba(245,240,230,0.08); border-radius:999px; padding:5px 11px 5px 8px; font:500 11px 'Onest',sans-serif; color:rgba(245,240,230,0.68); cursor:pointer; transition:all 180ms cubic-bezier(0.2,0,0,1); }
     .chip i { width:7px; height:7px; border-radius:99px; flex:none; }
     .chip.off { opacity:0.35; }
     .chip:active { transform:scale(0.96); }
-    .details { position:absolute; top:58px; right:14px; width:250px; background:rgba(14,13,11,0.94); border:1px solid rgba(245,240,230,0.1); border-radius:16px; padding:14px; display:grid; gap:8px; transition:opacity 180ms, transform 180ms cubic-bezier(0.16,1,0.3,1); }
+    .details { position:absolute; top:96px; right:14px; width:250px; background:rgba(14,13,11,0.94); border:1px solid rgba(245,240,230,0.1); border-radius:16px; padding:14px; display:grid; gap:8px; transition:opacity 180ms, transform 180ms cubic-bezier(0.16,1,0.3,1); }
     .details.hide { opacity:0; transform:translateY(-6px); pointer-events:none; }
     .details .ey { font:600 10px 'Onest',sans-serif; letter-spacing:0.22em; text-transform:uppercase; }
     .details h4 { margin:0; font:600 15px/1.25 'Onest',sans-serif; color:#F5F0E6; overflow-wrap:anywhere; }
@@ -59,6 +65,13 @@
     .details .x:hover { color:#F5F0E6; }
     canvas.mini { position:absolute; right:14px; bottom:14px; width:148px; height:100px; border-radius:12px; border:1px solid rgba(245,240,230,0.08); background:rgba(14,13,11,0.88); cursor:pointer; transition:opacity 260ms; }
     canvas.mini.hide { opacity:0; pointer-events:none; }
+    @media (max-width: 760px) {
+      .legend-toggle { top:104px; }
+      .chips { left:14px; right:14px; top:142px; width:auto; display:flex; flex-wrap:wrap; max-height:74px; }
+      .legend-title { width:100%; }
+      .details { top:190px; right:14px; width:min(250px, calc(100% - 28px)); }
+      .hint { display:none; }
+    }
   `;
 
   const SEARCH_SVG = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#F5F0E6" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.2-4.2"></path></svg>`;
@@ -92,11 +105,12 @@
         <div class="bar">
           <div class="seg"><button data-m="2d" class="on">2D</button><button data-m="3d">3D</button></div>
           <div class="search">${SEARCH_SVG}<input placeholder="Поиск по графу" /></div>
-          <button class="tool" title="Вписать граф">${FIT_SVG}</button>
+          <button class="tool" title="Выравнивание графа">${FIT_SVG}</button>
           <div class="spacer"></div>
           <div class="hint"></div>
         </div>
-        <div class="chips"></div>
+        <button class="legend-toggle" type="button"><i></i>Цвета</button>
+        <div class="chips hide"></div>
         <div class="details hide"></div>
         <canvas class="mini"></canvas>`;
 
@@ -106,11 +120,14 @@
       this.mctx = this.mini.getContext("2d");
       this.detailsEl = this.shadowRoot.querySelector(".details");
       this.hintEl = this.shadowRoot.querySelector(".hint");
+      this.legendEl = this.shadowRoot.querySelector(".chips");
+      this.legendButton = this.shadowRoot.querySelector(".legend-toggle");
 
       this.shadowRoot.querySelectorAll(".seg button").forEach((b) =>
         b.addEventListener("click", () => this.setMode(b.dataset.m)));
       this.shadowRoot.querySelector(".tool").addEventListener("click", () => this.fit(true));
       this.shadowRoot.querySelector(".search input").addEventListener("input", (e) => this.search(e.target.value));
+      this.legendButton.addEventListener("click", () => this.toggleLegend());
 
       this.setData((window.HL_DATA && window.HL_DATA.graph) || { nodes: [], edges: [] }, { fit: false });
 
@@ -192,15 +209,15 @@
     renderChips() {
       const chips = this.shadowRoot?.querySelector(".chips");
       if (!chips) return;
-      chips.innerHTML = "";
-      const present = [...new Set(this.nodes.map((n) => n.type))];
+      chips.innerHTML = `<div class="legend-title">Цвета графа</div>`;
+      const present = new Set(this.nodes.map((n) => n.type));
       for (const t of Object.keys(TYPE)) {
-        if (!present.includes(t)) continue;
         const c = document.createElement("button");
         c.className = "chip";
-        c.classList.toggle("off", this.hidden_.has(t));
+        c.classList.toggle("off", this.hidden_.has(t) || !present.has(t));
         c.innerHTML = `<i style="background:${TYPE[t].c}"></i>${TYPE[t].label}`;
         c.addEventListener("click", () => {
+          if (!present.has(t)) return;
           if (this.hidden_.has(t)) this.hidden_.delete(t);
           else this.hidden_.add(t);
           c.classList.toggle("off", this.hidden_.has(t));
@@ -212,7 +229,13 @@
     setBarLeft(px) {
       const bar = this.shadowRoot.querySelector(".bar"), chips = this.shadowRoot.querySelector(".chips");
       bar.style.left = 14 + px + "px";
-      chips.style.left = 14 + px + "px";
+      chips.style.right = 14 + "px";
+    }
+    toggleLegend(force) {
+      const open = force === undefined ? this.legendEl.classList.contains("hide") : Boolean(force);
+      this.legendEl.classList.toggle("hide", !open);
+      this.legendButton.classList.toggle("on", open);
+      if (open) this.hideDetails();
     }
     setMode(m) {
       if (m === this.mode) return;
@@ -393,13 +416,18 @@
       const p = this.pt(e);
       this.downP = p; this.moved = false;
       const n = this.nodeAt(p);
-      if (this.mode === "2d" && n) { this.dragNode = n; this.alpha = Math.max(this.alpha, 0.35); }
-      else this.panStart = { ...p, tx: this.transform.x, ty: this.transform.y, rx: this.rot.x, ry: this.rot.y };
+      this.pendingNode = this.mode === "2d" ? n : null;
+      if (!this.pendingNode) this.panStart = { ...p, tx: this.transform.x, ty: this.transform.y, rx: this.rot.x, ry: this.rot.y };
       this.cv.classList.add("grabbing");
     }
     onMove(e) {
       const p = this.pt(e);
-      if (this.downP && (Math.abs(p.x - this.downP.x) + Math.abs(p.y - this.downP.y) > 3)) this.moved = true;
+      const movedDistance = this.downP ? Math.abs(p.x - this.downP.x) + Math.abs(p.y - this.downP.y) : 0;
+      if (movedDistance > 5) this.moved = true;
+      if (this.pendingNode && this.moved && !this.dragNode) {
+        this.dragNode = this.pendingNode;
+        this.alpha = Math.max(this.alpha, 0.35);
+      }
       if (this.dragNode) {
         const k = this.transform.k;
         this.dragNode.x = (p.x - this.transform.x) / k;
@@ -427,10 +455,11 @@
       const wasDrag = this.dragNode, p = this.pt(e);
       this.dragNode = null; this.panStart = null;
       if (!this.moved && this.downP) {
-        const n = this.nodeAt(p);
+        const n = this.pendingNode || this.nodeAt(p);
         if (n) { this.focusNode(n.id); this.dispatchEvent(new CustomEvent("nodeselect", { detail: { id: n.id }, bubbles: true, composed: true })); }
         else if (!wasDrag) this.clearFocus();
       }
+      this.pendingNode = null;
       this.downP = null;
     }
     onWheel(e) {
@@ -453,14 +482,22 @@
       const mx = r.width ? (e.clientX - r.left) / r.width : 0.5, my = r.height ? (e.clientY - r.top) / r.height : 0.5;
       const b = this.bounds();
       const wx = b.x0 + mx * (b.x1 - b.x0), wy = b.y0 + my * (b.y1 - b.y0);
-      const w = this.cv.clientWidth, h = this.cv.clientHeight;
-      this.transform.x = w / 2 - wx * this.transform.k;
-      this.transform.y = h / 2 - wy * this.transform.k;
+      const area = this.visibleArea();
+      const w = area.width, h = area.height;
+      this.transform.x = area.x + w / 2 - wx * this.transform.k;
+      this.transform.y = area.y + h / 2 - wy * this.transform.k;
     }
     center(n) {
       if (this.mode !== "2d") return;
-      const w = this.cv.clientWidth, h = this.cv.clientHeight;
-      this.centerAnim = { n, sx: this.transform.x, sy: this.transform.y, tx: w / 2 - n.x * this.transform.k, ty: h / 2 - n.y * this.transform.k, t: 0 };
+      const area = this.visibleArea();
+      this.centerAnim = {
+        n,
+        sx: this.transform.x,
+        sy: this.transform.y,
+        tx: area.x + area.width / 2 - n.x * this.transform.k,
+        ty: area.y + area.height / 2 - n.y * this.transform.k,
+        t: 0,
+      };
     }
     bounds() {
       if (!this.nodes.length) return { x0: -160, y0: -110, x1: 160, y1: 110 };
@@ -469,22 +506,33 @@
       return { x0: x0 - 60, y0: y0 - 60, x1: x1 + 60, y1: y1 + 60 };
     }
     fit(anim) {
-      const w = this.cv.clientWidth, h = this.cv.clientHeight;
+      const area = this.visibleArea();
+      const w = area.width, h = area.height;
       if (!w || !h) return;
       if (!this.nodes.length) {
-        this.transform = { x: w / 2, y: h / 2, k: 1 };
+        this.transform = { x: area.x + w / 2, y: area.y + h / 2, k: 1 };
         return;
       }
       const b = this.bounds();
       const k = Math.min(1.6, Math.min(w / (b.x1 - b.x0), h / (b.y1 - b.y0)) * 0.94);
       const cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
-      this.transform = { x: w / 2 - cx * k, y: h / 2 - cy * k, k };
+      this.transform = { x: area.x + w / 2 - cx * k, y: area.y + h / 2 - cy * k, k };
       if (this.mode === "3d") { this.zoom3 = 1; }
+    }
+    visibleArea() {
+      const w = this.cv.clientWidth || this.clientWidth || 1;
+      const h = this.cv.clientHeight || this.clientHeight || 1;
+      const top = this.mode === "3d" ? 56 : 116;
+      const bottom = this.mode === "3d" ? 220 : 160;
+      const right = w > 760 ? 250 : 0;
+      const usableH = Math.max(220, h - top - bottom);
+      return { x: 0, y: top, width: Math.max(320, w - right), height: usableH, cx: (w - right) / 2, cy: top + usableH / 2 };
     }
 
     /* ─── детали ─── */
     showDetails(n, note) {
       if (!n) return;
+      this.toggleLegend(false);
       const t = TYPE[n.type] || { c: FG, label: n.type };
       const deg = (this.adj.get(n.id) || []).length;
       const isKpi = n.id === this.kpiId;
@@ -532,7 +580,8 @@
       this.draw();
     }
     project() {
-      const w = this.cv.clientWidth, h = this.cv.clientHeight;
+      const area = this.visibleArea();
+      const w = area.width;
       const cy = Math.cos(this.rot.y), sy = Math.sin(this.rot.y);
       const cx = Math.cos(this.rot.x), sx = Math.sin(this.rot.x);
       const f = 780;
@@ -542,7 +591,7 @@
         const y2 = n.Y * cx - z1 * sx;
         const z2 = n.Y * sx + z1 * cx;
         const s = (f / (f + z2)) * this.zoom3;
-        n.px = w / 2 + x1 * s; n.py = h / 2 + y2 * s; n.ps = s; n.pz = z2;
+        n.px = area.x + w / 2 + x1 * s; n.py = area.cy + y2 * s; n.ps = s; n.pz = z2;
       }
     }
     draw() {
@@ -667,9 +716,9 @@
       }
       /* видимая область */
       const { x: tx, y: ty, k } = this.transform;
-      const w = this.cv.clientWidth, h = this.cv.clientHeight;
-      const [vx0, vy0] = map(-tx / k, -ty / k);
-      const [vx1, vy1] = map((w - tx) / k, (h - ty) / k);
+      const area = this.visibleArea();
+      const [vx0, vy0] = map((area.x - tx) / k, (area.y - ty) / k);
+      const [vx1, vy1] = map((area.x + area.width - tx) / k, (area.y + area.height - ty) / k);
       m.strokeStyle = "rgba(224,152,48,0.55)"; m.lineWidth = 1;
       m.strokeRect(vx0, vy0, vx1 - vx0, vy1 - vy0);
     }

@@ -8,6 +8,7 @@ const state = {
   dockExpanded: false,
   graphKey: "",
   promptFiles: [],
+  settingsTab: "project",
 };
 
 const graphView = {
@@ -79,6 +80,9 @@ function bindEvents() {
 
   $$("[data-dock-tab]").forEach((button) => {
     button.addEventListener("click", () => setDockTab(button.dataset.dockTab));
+  });
+  $$("[data-settings-tab]").forEach((button) => {
+    button.addEventListener("click", () => setSettingsTab(button.dataset.settingsTab));
   });
   $("#dockExpandBtn")?.addEventListener("click", () => {
     state.dockExpanded = !state.dockExpanded;
@@ -397,6 +401,7 @@ function renderAll() {
   renderEvents();
   renderChat();
   renderDockState();
+  renderSettingsTabs();
   drawGraph();
 }
 
@@ -422,6 +427,24 @@ function setDockTab(tab) {
   state.dockTab = tab || "docs";
   if (state.dockTab === "chat") state.dockExpanded = true;
   renderDockState();
+}
+
+function renderSettingsTabs() {
+  const knownTabs = new Set($$("[data-settings-tab]").map((button) => button.dataset.settingsTab));
+  if (!knownTabs.has(state.settingsTab)) state.settingsTab = "project";
+  $$("[data-settings-tab]").forEach((button) => {
+    const active = button.dataset.settingsTab === state.settingsTab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  $$("[data-settings-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.settingsPanel !== state.settingsTab;
+  });
+}
+
+function setSettingsTab(tab) {
+  state.settingsTab = tab || "project";
+  renderSettingsTabs();
 }
 
 function renderActorBadge() {
@@ -506,8 +529,8 @@ function renderRuntime() {
   const badge = $("#runtimeBadge");
   if (!runtime) return;
   badge.classList.toggle("ok", Boolean(runtime.openai_enabled));
-  badge.textContent = runtime.openai_enabled ? `OpenAI · ${runtime.openai_model}` : "No API key";
-  badge.title = runtime.openai_research_model ? `Research: ${runtime.openai_research_model}` : "";
+  badge.textContent = runtime.openai_enabled ? "API подключен" : "API не задан";
+  badge.title = "";
 }
 
 function renderDocuments() {
