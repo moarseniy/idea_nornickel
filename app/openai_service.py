@@ -411,6 +411,8 @@ def _build_hypothesis_prompt(
 
 Сгенерируй {count} гипотез как структурированные мини-отчеты для экспертного чтения.
 Каждая гипотеза должна быть проверяемой лабораторно, с механизмом, рисками, ожидаемой ценностью и источниками из контекста.
+Используй экспертный фидбэк как механизм самоулучшения: усиливай паттерны из liked/высоко оцененных гипотез,
+а признаки disliked/низко оцененных гипотез избегай или явно исправляй в новых формулировках.
 Если web research включен, в описании гипотез подчеркни актуальную новизну относительно найденных статей,
 патентов или промышленных практик и добавь реальные URL в evidence.url.
 Отдельно выдели план внедрения в roadmap и возможные экономические расчеты в economics.
@@ -637,10 +639,49 @@ def _graph_context(graph: dict[str, list[dict[str, Any]]]) -> str:
 def _feedback_context(feedback: list[dict[str, Any]]) -> str:
     if not feedback:
         return "Нет."
-    return "\n".join(
-        f"- {item.get('actor')}: rating={item.get('rating')}, outcome={item.get('outcome')}, {item.get('comment')}"
-        for item in feedback[:12]
-    )
+    latest_reactions: dict[tuple[str, str], dict[str, Any]] = {}
+    notes: list[str] = []
+    for item in feedback[:80]:
+        actor = str(item.get("actor") or "expert")
+        hypothesis_id = str(item.get("hypothesis_id") or "project")
+        outcome = str(item.get("outcome") or "").strip().lower()
+        title = str(item.get("hypothesis_title") or hypothesis_id or "проект")
+        comment = str(item.get("comment") or "").strip()
+        rating = item.get("rating")
+
+        if outcome in {"liked", "like", "disliked", "dislike", "neutral", "reaction_removed"}:
+            key = (hypothesis_id, actor)
+            if key not in latest_reactions:
+                latest_reactions[key] = {"outcome": outcome, "title": title, "actor": actor}
+            continue
+
+        if comment.startswith("quick_reaction:"):
+            continue
+        notes.append(f"- {actor}: hypothesis={title[:120]}, rating={rating}, outcome={outcome or '-'}, comment={comment[:500] or '-'}")
+        if len(notes) >= 12:
+            break
+
+    reaction_summary: dict[str, dict[str, Any]] = {}
+    for reaction in latest_reactions.values():
+        outcome = reaction["outcome"]
+        if outcome in {"neutral", "reaction_removed"}:
+            continue
+        title = reaction["title"]
+        bucket = reaction_summary.setdefault(title, {"liked": 0, "disliked": 0})
+        if outcome in {"liked", "like"}:
+            bucket["liked"] += 1
+        elif outcome in {"disliked", "dislike"}:
+            bucket["disliked"] += 1
+
+    lines: list[str] = []
+    if reaction_summary:
+        lines.append("Быстрые реакции пользователей (учитывать как обучающий сигнал):")
+        for title, counts in list(reaction_summary.items())[:12]:
+            lines.append(f"- {title[:140]}: liked={counts['liked']}, disliked={counts['disliked']}")
+    if notes:
+        lines.append("Развернутые экспертные замечания:")
+        lines.extend(notes)
+    return "\n".join(lines) if lines else "Нет содержательного фидбэка."
 
 
 def _default_research_query(project: dict[str, Any], graph: dict[str, list[dict[str, Any]]]) -> str:

@@ -119,6 +119,12 @@ function bindEvents() {
       return;
     }
 
+    const reactionButton = event.target.closest("[data-reaction]");
+    if (reactionButton) {
+      await sendReaction(reactionButton.dataset.id, reactionButton.dataset.reaction);
+      return;
+    }
+
     const button = event.target.closest("[data-status]");
     if (button) {
       await updateStatus(button.dataset.id, button.dataset.status);
@@ -347,6 +353,30 @@ async function updateStatus(id, status) {
   }
 }
 
+async function sendReaction(id, reaction) {
+  if (!id || !["liked", "disliked"].includes(reaction)) return;
+  const current = reactionSummary(id).mine;
+  const nextReaction = current === reaction ? "neutral" : reaction;
+  setBusy(true);
+  try {
+    const payload = await api(`/api/projects/${state.projectId}/hypotheses/${id}/feedback`, {
+      method: "POST",
+      json: {
+        rating: nextReaction === "liked" ? 5 : nextReaction === "disliked" ? 1 : 3,
+        outcome: nextReaction,
+        comment: `quick_reaction:${nextReaction}`,
+      },
+    });
+    state.state = payload.state;
+    renderAll();
+    toast(nextReaction === "neutral" ? "Реакция снята" : nextReaction === "liked" ? "Лайк учтен для следующих генераций" : "Дизлайк учтен для самоулучшения");
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
 async function sendFeedback(form) {
   const id = form.dataset.id;
   setBusy(true);
@@ -568,6 +598,7 @@ function renderHypotheses() {
 function renderHypothesis(item) {
   const isOpen = item.id === state.openHypothesisId;
   const graphNode = `hypothesis:${item.id}`;
+  const reactions = reactionSummary(item.id);
   const metrics = [
     ["Новизна", item.novelty],
     ["Реализ.", item.feasibility],
@@ -594,6 +625,10 @@ function renderHypothesis(item) {
       <div class="score">${displayScore(item)}<span>score</span></div>
     </div>
     <div class="statement">${escapeHtml(item.statement)}</div>
+    <div class="reaction-row" aria-label="Быстрая обратная связь">
+      <button type="button" class="reaction-button liked ${reactions.mine === "liked" ? "active" : ""}" data-id="${escapeHtml(item.id)}" data-reaction="liked" title="Нравится: усилить похожие гипотезы в следующих генерациях"><span>👍</span><b>${reactions.likes}</b></button>
+      <button type="button" class="reaction-button disliked ${reactions.mine === "disliked" ? "active" : ""}" data-id="${escapeHtml(item.id)}" data-reaction="disliked" title="Не нравится: избегать похожих гипотез в следующих генерациях"><span>👎</span><b>${reactions.dislikes}</b></button>
+    </div>
     <div class="metrics">${metrics
       .map(([label, value]) => `<div class="metric"><span>${label}</span><b>${displayMetric(value)}</b></div>`)
       .join("")}</div>
@@ -652,6 +687,32 @@ function renderHypothesis(item) {
         : ""
     }
   </article>`;
+}
+
+function reactionSummary(hypothesisId) {
+  const latest = new Map();
+  (state.state?.feedback || []).forEach((item) => {
+    if (String(item.hypothesis_id || "") !== String(hypothesisId)) return;
+    const outcome = normalizeReaction(item.outcome);
+    if (!outcome) return;
+    const key = item.actor || "expert";
+    if (!latest.has(key)) latest.set(key, outcome);
+  });
+  let likes = 0;
+  let dislikes = 0;
+  latest.forEach((outcome) => {
+    if (outcome === "liked") likes += 1;
+    if (outcome === "disliked") dislikes += 1;
+  });
+  return { likes, dislikes, mine: latest.get(actor()) || "" };
+}
+
+function normalizeReaction(value) {
+  const outcome = String(value || "").trim().toLowerCase();
+  if (["liked", "like"].includes(outcome)) return "liked";
+  if (["disliked", "dislike"].includes(outcome)) return "disliked";
+  if (["neutral", "reaction_removed"].includes(outcome)) return "neutral";
+  return "";
 }
 
 function renderEvidenceReport(items) {

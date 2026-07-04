@@ -522,10 +522,11 @@ class Database:
             )
             if outcome and hypothesis_id:
                 status = _status_from_outcome(outcome)
-                conn.execute(
-                    "UPDATE hypotheses SET status=?, updated_at=? WHERE id=? AND project_id=?",
-                    (status, now, hypothesis_id, project_id),
-                )
+                if status:
+                    conn.execute(
+                        "UPDATE hypotheses SET status=?, updated_at=? WHERE id=? AND project_id=?",
+                        (status, now, hypothesis_id, project_id),
+                    )
             self._add_event_conn(
                 conn,
                 project_id,
@@ -540,13 +541,28 @@ class Database:
 
     def get_feedback(self, feedback_id: str) -> dict[str, Any] | None:
         with self.connect() as conn:
-            row = conn.execute("SELECT * FROM feedback WHERE id=?", (feedback_id,)).fetchone()
+            row = conn.execute(
+                """
+                SELECT f.*, h.title AS hypothesis_title
+                FROM feedback f
+                LEFT JOIN hypotheses h ON h.id = f.hypothesis_id
+                WHERE f.id=?
+                """,
+                (feedback_id,),
+            ).fetchone()
         return self._feedback_from_row(row) if row else None
 
     def list_feedback(self, project_id: str) -> list[dict[str, Any]]:
         with self.connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM feedback WHERE project_id=? ORDER BY created_at DESC LIMIT 100",
+                """
+                SELECT f.*, h.title AS hypothesis_title
+                FROM feedback f
+                LEFT JOIN hypotheses h ON h.id = f.hypothesis_id
+                WHERE f.project_id=?
+                ORDER BY f.created_at DESC
+                LIMIT 100
+                """,
                 (project_id,),
             ).fetchall()
         return [self._feedback_from_row(row) for row in rows]
@@ -699,6 +715,8 @@ def _merge_source_ids(value: Any, extra_source_id: str | None) -> list[str]:
 
 def _status_from_outcome(outcome: str) -> str:
     normalized = outcome.lower().strip()
+    if normalized in {"liked", "like", "disliked", "dislike", "neutral", "reaction_removed"}:
+        return ""
     if normalized in {"confirmed", "подтверждена", "подтверждено", "success"}:
         return "confirmed"
     if normalized in {"rejected", "опровергнута", "опровергнуто", "failed"}:
