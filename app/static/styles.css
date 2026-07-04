@@ -1,5 +1,5 @@
 :root {
-  --dock-height: 332px;
+  --dock-height: 192px;
   --bg: #0c0d0c;
   --panel: #141411;
   --panel-2: #191713;
@@ -175,8 +175,8 @@ button {
 }
 
 .left-rail {
-  width: min(472px, 44vw);
-  min-width: 392px;
+  width: min(540px, 48vw);
+  min-width: 440px;
   flex: none;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
@@ -539,12 +539,61 @@ select:focus {
 }
 
 .actions {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   border-bottom: 0;
 }
 
 .source-language-field {
   grid-column: 1 / -1;
+}
+
+.prompt-files-list {
+  grid-column: 1 / -1;
+  min-height: 30px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.prompt-files-empty {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.prompt-file-chip {
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-3);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.prompt-file-chip span {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-file-chip b {
+  color: var(--faint);
+  font-weight: 700;
+}
+
+.prompt-file-chip button {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(245, 240, 230, 0.08);
+  color: var(--muted);
 }
 
 .graph-stage {
@@ -603,7 +652,7 @@ knowledge-graph {
 }
 
 .dock-panel {
-  height: 286px;
+  height: 146px;
   min-height: 0;
   border-bottom: 1px solid var(--line);
 }
@@ -669,11 +718,20 @@ knowledge-graph {
 
 .documents-list,
 .events-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-content: start;
+  display: flex;
+  align-content: center;
   gap: 8px;
-  padding: 14px 16px;
+  padding: 10px 14px;
+}
+
+.documents-list {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.events-list {
+  flex-direction: column;
+  overflow-y: auto;
 }
 
 .doc-row,
@@ -687,6 +745,11 @@ knowledge-graph {
   border-radius: 8px;
   background: var(--panel-2);
   font-size: 13px;
+}
+
+.doc-row {
+  width: min(340px, 42vw);
+  flex: 0 0 auto;
 }
 
 .doc-row b,
@@ -868,7 +931,7 @@ knowledge-graph {
 
 @media (max-width: 640px) {
   :root {
-    --dock-height: 376px;
+    --dock-height: 236px;
   }
 
   .surface-head,
@@ -901,7 +964,7 @@ knowledge-graph {
   }
 
   .dock-panel {
-    height: 330px;
+    height: 190px;
   }
 
   .dock-tabs {

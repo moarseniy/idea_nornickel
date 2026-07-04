@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import fitz
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -215,12 +216,51 @@ def generate_hypotheses(
     payload: GenerateRequest,
     x_user: str | None = Header(default=None, alias="X-User"),
 ) -> dict[str, Any]:
+    return _generate_hypotheses_core(project_id, payload, _actor(x_user))
+
+
+@app.post("/api/projects/{project_id}/generate-with-files")
+async def generate_hypotheses_with_files(
+    project_id: str,
+    payload_json: str = Form(...),
+    files: list[UploadFile] | None = File(default=None),
+    ocr_languages: str | None = Form(default=None),
+    x_user: str | None = Header(default=None, alias="X-User"),
+) -> dict[str, Any]:
+    try:
+        payload = GenerateRequest.model_validate_json(payload_json)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Некорректные параметры генерации: {exc}") from exc
+
+    prompt_documents: list[dict[str, Any]] = []
+    selected_ocr_languages = _request_ocr_languages(ocr_languages)
+    for file in files or []:
+        data = await file.read()
+        if len(data) > settings.max_upload_bytes:
+            raise HTTPException(status_code=413, detail=f"Файл {file.filename} превышает MAX_UPLOAD_BYTES")
+        prompt_documents.append(
+            _parse_prompt_attachment(
+                filename=file.filename or "prompt-attachment",
+                content_type=file.content_type or "application/octet-stream",
+                data=data,
+                ocr_languages=selected_ocr_languages,
+            )
+        )
+    return _generate_hypotheses_core(project_id, payload, _actor(x_user), prompt_documents=prompt_documents)
+
+
+def _generate_hypotheses_core(
+    project_id: str,
+    payload: GenerateRequest,
+    actor: str,
+    prompt_documents: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     project = _require_project(project_id)
-    documents = db.list_documents(project_id, include_text=True)
+    prompt_documents = prompt_documents or []
+    documents = [*prompt_documents, *db.list_documents(project_id, include_text=True)]
     graph = db.get_graph(project_id)
     feedback = db.list_feedback(project_id)
     weights = {**project.get("settings", {}), **payload.weights}
-    actor = _actor(x_user)
     try:
         hypotheses, meta = ai.generate_hypotheses(
             project=project,
@@ -246,6 +286,7 @@ def generate_hypotheses(
             exc,
         )
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    meta = {**meta, "prompt_attachments": len(prompt_documents)}
     created = db.add_hypotheses(project_id, hypotheses, actor)
     for hypothesis in created:
         nodes, edges = graph_from_hypothesis(hypothesis)
@@ -328,8 +369,9 @@ def export_json(project_id: str) -> JSONResponse:
 
 @app.get("/api/projects/{project_id}/export.csv")
 def export_csv(project_id: str) -> Response:
-    _require_project(project_id)
+    project = _require_project(project_id)
     hypotheses = db.list_hypotheses(project_id)
+    weights = _export_weights(project)
     buffer = io.StringIO()
     writer = csv.DictWriter(
         buffer,
@@ -348,12 +390,255 @@ def export_csv(project_id: str) -> Response:
     )
     writer.writeheader()
     for item in hypotheses:
-        writer.writerow({key: item.get(key) for key in writer.fieldnames})
+        values = _export_hypothesis_values(item, weights)
+        writer.writerow(
+            {
+                **{key: values.get(key, item.get(key)) for key in writer.fieldnames},
+                "score": f"{values['score']:.1f}",
+                "novelty": f"{values['novelty']:.0f}",
+                "feasibility": f"{values['feasibility']:.0f}",
+                "impact": f"{values['impact']:.0f}",
+                "risk": f"{values['risk']:.0f}",
+            }
+        )
     return Response(
         content=buffer.getvalue(),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="hypotheses.csv"'},
     )
+
+
+@app.get("/api/projects/{project_id}/export.md")
+def export_markdown(project_id: str) -> Response:
+    _require_project(project_id)
+    data = db.export_project(project_id)
+    content = _render_markdown_export(data)
+    return Response(
+        content=content,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="hypotheses.md"'},
+    )
+
+
+@app.get("/api/projects/{project_id}/export.pdf")
+def export_pdf(project_id: str) -> Response:
+    _require_project(project_id)
+    data = db.export_project(project_id)
+    content = _render_pdf_export(data)
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="hypotheses.pdf"'},
+    )
+
+
+def _render_markdown_export(data: dict[str, Any]) -> str:
+    project = data.get("project") or {}
+    hypotheses = data.get("hypotheses") or []
+    documents = data.get("documents") or []
+    weights = _export_weights(project)
+    lines = [
+        f"# {project.get('name') or 'Hypothesis Lab'}",
+        "",
+        f"**Домен:** {project.get('domain') or '-'}",
+        f"**Цель / KPI:** {project.get('goal') or '-'}",
+        f"**Ограничения:** {project.get('constraints') or '-'}",
+        "",
+        f"_Источников: {len(documents)} · Гипотез: {len(hypotheses)}_",
+        "",
+        "## Ранжирование",
+        "",
+        "| # | Score | Статус | Гипотеза | Новизна | Реализ. | Эффект | Риск |",
+        "|---:|---:|---|---|---:|---:|---:|---:|",
+    ]
+    for index, item in enumerate(hypotheses, start=1):
+        values = _export_hypothesis_values(item, weights)
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(index),
+                    f"{values['score']:.1f}",
+                    _md_cell(values.get("status")),
+                    _md_cell(values.get("title")),
+                    f"{values['novelty']:.0f}",
+                    f"{values['feasibility']:.0f}",
+                    f"{values['impact']:.0f}",
+                    f"{values['risk']:.0f}",
+                ]
+            )
+            + " |"
+        )
+    for index, item in enumerate(hypotheses, start=1):
+        values = _export_hypothesis_values(item, weights)
+        lines.extend(
+            [
+                "",
+                f"## {index}. {item.get('title') or 'Гипотеза'}",
+                "",
+                f"**Score:** {values['score']:.1f} · **Статус:** {item.get('status') or '-'}",
+                "",
+                item.get("statement") or "",
+                "",
+            ]
+        )
+        mechanism = item.get("mechanism") or item.get("rationale")
+        if mechanism:
+            lines.extend(["**Механизм / обоснование:**", "", str(mechanism), ""])
+        if item.get("evidence"):
+            lines.extend(["**Источники:**", ""])
+            for evidence in item.get("evidence") or []:
+                source = evidence.get("source") or "source"
+                quote = evidence.get("quote") or evidence.get("why") or ""
+                lines.append(f"- **{source}:** {quote}")
+            lines.append("")
+        if item.get("roadmap"):
+            lines.extend(["**Дорожная карта:**", ""])
+            for step in item.get("roadmap") or []:
+                lines.append(f"- {step.get('step')}. {step.get('title')} -> {step.get('output')}")
+            lines.append("")
+    return "\n".join(lines).strip() + "\n"
+
+
+def _render_pdf_export(data: dict[str, Any]) -> bytes:
+    project = data.get("project") or {}
+    hypotheses = data.get("hypotheses") or []
+    documents = data.get("documents") or []
+    weights = _export_weights(project)
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    y = 42
+
+    def add_page() -> None:
+        nonlocal page, y
+        page = doc.new_page(width=595, height=842)
+        y = 42
+
+    def text_block(text: str, rect_height: float, *, size: float = 10.5, color: tuple[float, float, float] = (0.12, 0.12, 0.12)) -> None:
+        nonlocal y
+        if y + rect_height > 800:
+            add_page()
+        page.insert_textbox(
+            fitz.Rect(42, y, 553, y + rect_height),
+            str(text or ""),
+            fontsize=size,
+            fontname="helv",
+            color=color,
+            align=fitz.TEXT_ALIGN_LEFT,
+        )
+        y += rect_height + 6
+
+    page.draw_rect(fitz.Rect(0, 0, 595, 842), color=(0.98, 0.96, 0.92), fill=(0.98, 0.96, 0.92))
+    page.draw_rect(fitz.Rect(32, 32, 563, 116), color=(0.88, 0.58, 0.18), fill=(0.88, 0.58, 0.18))
+    page.insert_textbox(
+        fitz.Rect(48, 48, 547, 76),
+        project.get("name") or "Hypothesis Lab",
+        fontsize=18,
+        fontname="helv",
+        color=(0.05, 0.05, 0.04),
+    )
+    page.insert_textbox(
+        fitz.Rect(48, 78, 547, 104),
+        f"{len(documents)} источников · {len(hypotheses)} гипотез",
+        fontsize=10,
+        fontname="helv",
+        color=(0.14, 0.12, 0.09),
+    )
+    y = 134
+    text_block(f"Домен: {project.get('domain') or '-'}", 22, size=10.5)
+    text_block(f"Цель / KPI: {project.get('goal') or '-'}", 44, size=10.5)
+
+    for index, item in enumerate(hypotheses, start=1):
+        values = _export_hypothesis_values(item, weights)
+        if y + 134 > 800:
+            add_page()
+        page.draw_rect(fitz.Rect(36, y, 559, y + 124), color=(0.86, 0.82, 0.73), fill=(1, 0.99, 0.96), width=0.6)
+        page.draw_rect(fitz.Rect(36, y, 41, y + 124), color=(0.88, 0.58, 0.18), fill=(0.88, 0.58, 0.18))
+        page.insert_textbox(
+            fitz.Rect(52, y + 12, 455, y + 42),
+            f"{index}. {item.get('title') or 'Гипотеза'}",
+            fontsize=12.5,
+            fontname="helv",
+            color=(0.08, 0.08, 0.07),
+        )
+        page.insert_textbox(
+            fitz.Rect(470, y + 12, 545, y + 42),
+            f"{values['score']:.1f}",
+            fontsize=18,
+            fontname="helv",
+            color=(0.88, 0.58, 0.18),
+            align=fitz.TEXT_ALIGN_RIGHT,
+        )
+        page.insert_textbox(
+            fitz.Rect(52, y + 45, 545, y + 86),
+            item.get("statement") or "",
+            fontsize=9.5,
+            fontname="helv",
+            color=(0.18, 0.17, 0.15),
+        )
+        metrics = (
+            f"status: {item.get('status') or '-'}   "
+            f"novelty {values['novelty']:.0f} · "
+            f"feasibility {values['feasibility']:.0f} · "
+            f"impact {values['impact']:.0f} · "
+            f"risk {values['risk']:.0f}"
+        )
+        page.insert_textbox(
+            fitz.Rect(52, y + 92, 545, y + 114),
+            metrics,
+            fontsize=8.5,
+            fontname="helv",
+            color=(0.38, 0.35, 0.29),
+        )
+        y += 138
+
+    payload = doc.tobytes(garbage=4, deflate=True)
+    doc.close()
+    return payload
+
+
+def _export_weights(project: dict[str, Any]) -> dict[str, float]:
+    settings_weights = project.get("settings") if isinstance(project, dict) else {}
+    return {
+        "novelty": float((settings_weights or {}).get("novelty", 0.25)),
+        "feasibility": float((settings_weights or {}).get("feasibility", 0.25)),
+        "impact": float((settings_weights or {}).get("impact", 0.35)),
+        "risk": float((settings_weights or {}).get("risk", 0.15)),
+    }
+
+
+def _export_hypothesis_values(item: dict[str, Any], weights: dict[str, float]) -> dict[str, Any]:
+    novelty = _metric_for_export(item.get("novelty"))
+    feasibility = _metric_for_export(item.get("feasibility"))
+    impact = _metric_for_export(item.get("impact"))
+    risk = _metric_for_export(item.get("risk"))
+    raw_values = [float(item.get(key) or 0) for key in ("novelty", "feasibility", "impact", "risk")]
+    looks_unit_scaled = any(0 < value <= 1 for value in raw_values) and all(value <= 1 for value in raw_values)
+    score = (
+        novelty * weights["novelty"]
+        + feasibility * weights["feasibility"]
+        + impact * weights["impact"]
+        + (100 - risk) * weights["risk"]
+        if looks_unit_scaled
+        else float(item.get("score") or 0)
+    )
+    return {
+        **item,
+        "score": score,
+        "novelty": novelty,
+        "feasibility": feasibility,
+        "impact": impact,
+        "risk": risk,
+    }
+
+
+def _metric_for_export(value: Any) -> float:
+    number = float(value or 0)
+    return number * 100 if 0 < number <= 1 else number
+
+
+def _md_cell(value: Any) -> str:
+    return str(value or "").replace("|", "\\|").replace("\n", " ")
 
 
 def _ingest_document_bytes(
@@ -406,6 +691,38 @@ def _ingest_document_bytes(
         source_id=document["id"],
     )
     return {"document": document, "graph_update": graph_update, "extractor": extractor_meta, "vision": vision_meta}
+
+
+def _parse_prompt_attachment(
+    filename: str,
+    content_type: str,
+    data: bytes,
+    ocr_languages: list[str] | None = None,
+) -> dict[str, Any]:
+    display_name = safe_filename(filename)
+    selected_ocr_languages = ocr_languages or settings.pdf_ocr_languages
+    parsed = parse_document(
+        display_name,
+        content_type,
+        data,
+        settings.max_document_chars,
+        pdf_ocr_enabled=settings.pdf_ocr_enabled,
+        pdf_ocr_languages=selected_ocr_languages,
+        pdf_ocr_model_dir=settings.pdf_ocr_model_dir,
+        pdf_ocr_min_chars=settings.pdf_ocr_min_chars,
+        pdf_text_layer_min_chars=settings.pdf_text_layer_min_chars,
+        pdf_render_dpi=settings.pdf_render_dpi,
+        pdf_vision_max_pages=settings.pdf_vision_max_pages,
+    )
+    vision_meta = _enrich_vision_images(parsed, selected_ocr_languages)
+    return {
+        "id": f"prompt:{uuid.uuid4()}",
+        "filename": f"[тестовый промпт] {display_name}",
+        "content_type": content_type,
+        "text": parsed.text,
+        "metadata": {**parsed.metadata, "prompt_attachment": True, "vision": vision_meta},
+        "path": None,
+    }
 
 
 def _enrich_vision_images(parsed: Any, ocr_languages: list[str]) -> dict[str, Any]:

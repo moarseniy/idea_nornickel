@@ -6,6 +6,7 @@ const state = {
   openHypothesisId: null,
   dockTab: "docs",
   graphKey: "",
+  promptFiles: [],
 };
 
 const graphView = {
@@ -51,10 +52,12 @@ function bindEvents() {
   $("#projectForm").addEventListener("submit", saveProject);
   $("#uploadBtn").addEventListener("click", () => $("#fileInput").click());
   $("#fileInput").addEventListener("change", uploadFiles);
-  $("#importBtn").addEventListener("click", importSamples);
+  $("#promptFilesBtn").addEventListener("click", () => $("#promptFileInput").click());
+  $("#promptFileInput").addEventListener("change", selectPromptFiles);
   $("#generateBtn").addEventListener("click", generateHypotheses);
-  $("#exportJsonBtn").addEventListener("click", () => openExport("json"));
   $("#exportCsvBtn").addEventListener("click", () => openExport("csv"));
+  $("#exportMdBtn").addEventListener("click", () => openExport("md"));
+  $("#exportPdfBtn").addEventListener("click", () => openExport("pdf"));
   $("#chatForm").addEventListener("submit", sendChat);
   $("#graphZoomOut")?.addEventListener("click", () => zoomGraph(0.82));
   $("#graphZoomIn")?.addEventListener("click", () => zoomGraph(1.22));
@@ -75,6 +78,13 @@ function bindEvents() {
 
   $$("[data-dock-tab]").forEach((button) => {
     button.addEventListener("click", () => setDockTab(button.dataset.dockTab));
+  });
+
+  $("#promptFilesList").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-remove-prompt-file]");
+    if (!button) return;
+    state.promptFiles.splice(Number(button.dataset.removePromptFile), 1);
+    renderPromptFiles();
   });
 
   window.addEventListener("resize", () => {
@@ -239,6 +249,17 @@ async function importSamples() {
   }
 }
 
+function selectPromptFiles(event) {
+  const incoming = Array.from(event.target.files || []);
+  const seen = new Set(state.promptFiles.map((file) => `${file.name}:${file.size}:${file.lastModified}`));
+  incoming.forEach((file) => {
+    const key = `${file.name}:${file.size}:${file.lastModified}`;
+    if (!seen.has(key)) state.promptFiles.push(file);
+  });
+  event.target.value = "";
+  renderPromptFiles();
+}
+
 function selectedSourceLanguages() {
   const value = $("#sourceLanguageSelect")?.value || "";
   return value
@@ -255,23 +276,37 @@ async function generateHypotheses() {
       .split(",")
       .map((item) => item.trim())
       .filter(Boolean);
-    const payload = await api(`/api/projects/${state.projectId}/generate`, {
-      method: "POST",
-      json: {
-        count: Number($("#countInput").value || 5),
-        weights: state.weights,
-        exclusions,
-        include_roadmap: true,
-      },
-    });
+    const requestPayload = {
+      count: Number($("#countInput").value || 5),
+      weights: state.weights,
+      exclusions,
+      include_roadmap: true,
+    };
+    const payload = state.promptFiles.length
+      ? await generateWithPromptFiles(requestPayload)
+      : await api(`/api/projects/${state.projectId}/generate`, {
+          method: "POST",
+          json: requestPayload,
+        });
     state.state = payload.state;
+    state.promptFiles = [];
+    renderPromptFiles();
     renderAll();
-    toast("Гипотезы сгенерированы");
+    toast(payload.meta?.prompt_attachments ? `Гипотезы сгенерированы · вложений: ${payload.meta.prompt_attachments}` : "Гипотезы сгенерированы");
   } catch (error) {
     toast(error.message);
   } finally {
     setBusy(false);
   }
+}
+
+async function generateWithPromptFiles(requestPayload) {
+  const form = new FormData();
+  form.append("payload_json", JSON.stringify(requestPayload));
+  const ocrLanguages = $("#sourceLanguageSelect").value;
+  if (ocrLanguages) form.append("ocr_languages", ocrLanguages);
+  state.promptFiles.forEach((file) => form.append("files", file));
+  return api(`/api/projects/${state.projectId}/generate-with-files`, { method: "POST", body: form });
 }
 
 async function updateStatus(id, status) {
@@ -337,6 +372,7 @@ function renderAll() {
   renderProjectSelect();
   renderProjectForm();
   renderWeights();
+  renderPromptFiles();
   renderRuntime();
   renderDocuments();
   renderHypotheses();
@@ -387,6 +423,22 @@ function openHypothesisByGraphNode(nodeId) {
   requestAnimationFrame(() => {
     $(`.hypothesis-card[data-hypothesis-id="${cssEscape(hypothesisId)}"]`)?.scrollIntoView({ block: "nearest" });
   });
+}
+
+function renderPromptFiles() {
+  const list = $("#promptFilesList");
+  if (!list) return;
+  list.innerHTML = state.promptFiles.length
+    ? state.promptFiles
+        .map(
+          (file, index) => `<div class="prompt-file-chip">
+            <span title="${escapeHtml(file.name)}">${escapeHtml(trim(file.name, 28))}</span>
+            <b>${formatBytes(file.size)}</b>
+            <button type="button" data-remove-prompt-file="${index}" title="Убрать файл">×</button>
+          </div>`,
+        )
+        .join("")
+    : `<div class="prompt-files-empty">Файлы к промпту не выбраны</div>`;
 }
 
 function renderProjectSelect() {
@@ -1308,6 +1360,13 @@ function fileType(filename, contentType) {
   const extension = String(filename || "").split(".").pop();
   if (extension && extension !== filename) return extension.slice(0, 6).toUpperCase();
   return String(contentType || "file").split("/").pop().slice(0, 6).toUpperCase();
+}
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function cssEscape(value) {

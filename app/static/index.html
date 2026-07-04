@@ -107,7 +107,7 @@
               <label class="source-language-field">
                 <span>Язык источника</span>
                 <select id="sourceLanguageSelect">
-                  <option value="">Авто · RU/EN/ZH</option>
+                  <option value="">Авто · RU/EN/CN</option>
                   <option value="ru,en">Русский</option>
                   <option value="en">English</option>
                   <option value="ch_sim,en">中文 简体</option>
@@ -118,10 +118,13 @@
                 </select>
               </label>
               <input id="fileInput" type="file" accept=".pdf,.docx,.xlsx,.xlsm,.csv,.txt,.md,.png,.jpg,.jpeg" multiple hidden />
-              <button id="uploadBtn" class="secondary" type="button" title="Загрузить документы"><span>↑</span><b>Файлы</b></button>
-              <button id="importBtn" class="secondary" type="button" title="Импортировать папку data"><span>↧</span><b>data</b></button>
-              <button id="exportJsonBtn" class="secondary" type="button" title="Экспорт JSON"><span>{ }</span><b>JSON</b></button>
-              <button id="exportCsvBtn" class="secondary" type="button" title="Экспорт CSV"><span>⇥</span><b>CSV</b></button>
+              <input id="promptFileInput" type="file" accept=".pdf,.docx,.xlsx,.xlsm,.csv,.txt,.md,.png,.jpg,.jpeg" multiple hidden />
+              <button id="uploadBtn" class="secondary" type="button" title="Загрузить источники в граф знаний"><span>↑</span><b>В граф</b></button>
+              <button id="promptFilesBtn" class="secondary" type="button" title="Прикрепить файлы только к следующей генерации"><span>＋</span><b>Файлы к промпту</b></button>
+              <div id="promptFilesList" class="prompt-files-list"></div>
+              <button id="exportCsvBtn" class="secondary" type="button" title="Экспорт CSV"><span>↓</span><b>CSV</b></button>
+              <button id="exportMdBtn" class="secondary" type="button" title="Экспорт Markdown"><span>↓</span><b>Markdown</b></button>
+              <button id="exportPdfBtn" class="secondary" type="button" title="Экспорт PDF"><span>↓</span><b>PDF</b></button>
             </div>
           </details>
         </aside>
