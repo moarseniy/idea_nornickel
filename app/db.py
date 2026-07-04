@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from app.knowledge import is_low_signal_numeric_node
+
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -290,6 +292,13 @@ class Database:
         source_id: str | None = None,
     ) -> dict[str, int]:
         now = utcnow()
+        skipped_node_ids = {str(node.get("id") or "") for node in nodes if is_low_signal_numeric_node(node)}
+        nodes = [node for node in nodes if str(node.get("id") or "") not in skipped_node_ids]
+        edges = [
+            edge
+            for edge in edges
+            if str(edge.get("source") or "") not in skipped_node_ids and str(edge.get("target") or "") not in skipped_node_ids
+        ]
         inserted_nodes = 0
         inserted_edges = 0
         with self.connect() as conn:
@@ -406,16 +415,24 @@ class Database:
     def get_graph(self, project_id: str) -> dict[str, list[dict[str, Any]]]:
         with self.connect() as conn:
             node_rows = conn.execute(
-                "SELECT * FROM knowledge_nodes WHERE project_id=? ORDER BY weight DESC, label LIMIT 180",
+                "SELECT * FROM knowledge_nodes WHERE project_id=? ORDER BY weight DESC, label LIMIT 320",
                 (project_id,),
             ).fetchall()
             edge_rows = conn.execute(
-                "SELECT * FROM knowledge_edges WHERE project_id=? ORDER BY weight DESC LIMIT 360",
+                "SELECT * FROM knowledge_edges WHERE project_id=? ORDER BY weight DESC LIMIT 720",
                 (project_id,),
             ).fetchall()
+        nodes = [self._node_from_row(row) for row in node_rows]
+        nodes = [node for node in nodes if not is_low_signal_numeric_node(node)][:180]
+        node_ids = {str(node.get("id")) for node in nodes}
+        edges = [
+            edge
+            for edge in (self._edge_from_row(row) for row in edge_rows)
+            if str(edge.get("source")) in node_ids and str(edge.get("target")) in node_ids
+        ][:360]
         return {
-            "nodes": [self._node_from_row(row) for row in node_rows],
-            "edges": [self._edge_from_row(row) for row in edge_rows],
+            "nodes": nodes,
+            "edges": edges,
         }
 
     def add_hypotheses(self, project_id: str, hypotheses: list[dict[str, Any]], actor: str) -> list[dict[str, Any]]:

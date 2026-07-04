@@ -10,6 +10,7 @@
     material:   { c: "#C9AC80", label: "Материалы" },
     process:    { c: "#A08B6F", label: "Процессы" },
     reagent:    { c: "#B4915C", label: "Реагенты" },
+    parameter:  { c: "#8CAF82", label: "Параметры" },
     metric:     { c: "#7E7668", label: "Метрики" },
     equipment:  { c: "#6C665C", label: "Оборудование" },
     risk:       { c: "#C27566", label: "Риски" },

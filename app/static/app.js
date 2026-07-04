@@ -1110,7 +1110,7 @@ function layoutGraph(nodes, edges, width, height) {
   Object.values(byType).forEach((items) => {
     items.sort((a, b) => Number(b.degree || 0) - Number(a.degree || 0) || String(a.label).localeCompare(String(b.label)));
   });
-  const orderedTypes = ["hypothesis", "source", "process", "material", "reagent", "property", "metric", "equipment", "risk", "observation", "concept"];
+  const orderedTypes = ["hypothesis", "source", "process", "material", "reagent", "property", "parameter", "metric", "equipment", "risk", "observation", "concept"];
   orderedTypes.forEach((type, typeIndex) => {
     const items = byType[type] || [];
     const ring = typeRing(type, width, height);
@@ -1428,6 +1428,7 @@ function typeRing(type, width, height) {
     material: 0.66,
     reagent: 0.76,
     property: 0.86,
+    parameter: 0.9,
     metric: 0.94,
     equipment: 0.72,
     risk: 0.9,
@@ -1450,6 +1451,7 @@ function typeLabel(type) {
       process: "процесс",
       reagent: "реагент",
       property: "свойство",
+      parameter: "параметр",
       metric: "метрика",
       equipment: "оборудование",
       risk: "риск",
@@ -1541,6 +1543,7 @@ function colorForType(type) {
     process: "#6653a8",
     reagent: "#c95243",
     property: "#2f8d58",
+    parameter: "#8caf82",
     metric: "#a77a11",
     equipment: "#4c6f88",
     risk: "#9d3c35",

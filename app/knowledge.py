@@ -40,7 +40,17 @@ DOMAIN_TERMS: list[tuple[str, str, tuple[str, ...]]] = [
     ("equipment", "мельница", ("mill", "мельницы")),
 ]
 
-NUMERIC_RE = re.compile(r"\b\d+(?:[,.]\d+)?\s?(?:%|г/т|кг/т|мкм|мм|т/ч|ppm|pH)\b", re.IGNORECASE)
+UNIT_RE = r"%|г/т|кг/т|g/t|kg/t|мкм|µm|μm|um|мм|mm|т/ч|t/h|tph|ppm|°c|°с|℃"
+PH_RE = r"pH|рН"
+NUMBER_RE = r"\d+(?:[,.]\d+)?(?:\s*[-–—]\s*\d+(?:[,.]\d+)?)?"
+NUMERIC_RE = re.compile(
+    rf"(?<![\w/])(?:{PH_RE}\s*)?{NUMBER_RE}\s?(?:{UNIT_RE})(?![\w/])|(?<![\w/])(?:{PH_RE})\s?{NUMBER_RE}(?![\w/])",
+    re.IGNORECASE,
+)
+RAW_NUMERIC_LABEL_RE = re.compile(
+    rf"^\s*(?:[~≈<>≤≥±]\s*)?(?:{PH_RE}\s*)?{NUMBER_RE}(?:\s?(?:{UNIT_RE}))?\s*$",
+    re.IGNORECASE,
+)
 SENTENCE_RE = re.compile(r"(?<=[.!?。;])\s+|\n+")
 
 
@@ -104,25 +114,29 @@ def heuristic_graph_from_text(text: str, source_id: str, source_name: str) -> tu
                 "source_ids": [source_id],
             }
 
-    numeric_values = NUMERIC_RE.findall(text)
-    for value, count in Counter(numeric_values[:80]).most_common(24):
-        nid = stable_id("metric", value)
+    for label, values, evidence, count in _extract_parameter_groups(text):
+        nid = stable_id("parameter", label)
+        examples = ", ".join(value for value, _ in values.most_common(8))
+        evidence_text = " ".join(evidence[:2])
+        summary = f"Группа числовых параметров. Примеры значений: {examples}."
+        if evidence_text:
+            summary = f"{summary} Контекст: {evidence_text[:260]}"
         nodes[nid] = {
             "id": nid,
-            "label": value,
-            "type": "metric",
-            "summary": "Числовой параметр или результат эксперимента",
-            "weight": min(5.0, 1.0 + count),
+            "label": label,
+            "type": "parameter",
+            "summary": summary,
+            "weight": min(5.8, 1.2 + math.log(count + len(values) + 1)),
             "source_ids": [source_id],
         }
-        eid = edge_id(source_node_id, nid, "reports")
+        eid = edge_id(source_node_id, nid, "reports_parameter")
         edges[eid] = {
             "id": eid,
             "source": source_node_id,
             "target": nid,
-            "relation": "reports",
-            "evidence": value,
-            "weight": 1.0 + count,
+            "relation": "reports_parameter",
+            "evidence": examples,
+            "weight": min(5.0, 1.0 + math.log(count + 1)),
             "source_ids": [source_id],
         }
 
@@ -211,3 +225,90 @@ def _relation_for(left_kind: str, right_kind: str) -> str:
     if "equipment" in pair and "process" in pair:
         return "implemented_with"
     return "associated_with"
+
+
+def is_low_signal_numeric_label(label: str) -> bool:
+    text = _clean_parameter_value(label)
+    return bool(RAW_NUMERIC_LABEL_RE.fullmatch(text))
+
+
+def is_low_signal_numeric_node(node: dict[str, Any]) -> bool:
+    kind = str(node.get("type") or "").strip().lower()
+    if kind not in {"metric", "parameter", "property", "concept", "observation"}:
+        return False
+    return is_low_signal_numeric_label(str(node.get("label") or ""))
+
+
+def _extract_parameter_groups(text: str) -> list[tuple[str, Counter[str], list[str], int]]:
+    counters: dict[str, Counter[str]] = {}
+    evidence: dict[str, list[str]] = {}
+    for sentence in SENTENCE_RE.split(text[:100_000]):
+        cleaned_sentence = " ".join(sentence.split())
+        if not cleaned_sentence:
+            continue
+        for match in NUMERIC_RE.finditer(cleaned_sentence):
+            value = _clean_parameter_value(match.group(0))
+            label = _parameter_label(value, cleaned_sentence)
+            if not label:
+                continue
+            counters.setdefault(label, Counter())[value] += 1
+            examples = evidence.setdefault(label, [])
+            if len(examples) < 3 and cleaned_sentence not in examples:
+                examples.append(cleaned_sentence[:220])
+
+    groups: list[tuple[str, Counter[str], list[str], int]] = []
+    for label, values in counters.items():
+        groups.append((label, values, evidence.get(label, []), sum(values.values())))
+    groups.sort(key=lambda item: (-item[3], item[0]))
+    return groups[:12]
+
+
+def _parameter_label(value: str, context: str) -> str | None:
+    value_l = value.lower().replace(" ", "")
+    context_l = context.lower()
+
+    if "ph" in value_l or "рн" in value_l:
+        return "pH / кислотность"
+    if any(unit in value_l for unit in ("г/т", "g/t", "кг/т", "kg/t")):
+        return "Расход реагента / дозировка"
+    if any(unit in value_l for unit in ("мкм", "µm", "μm", "um")):
+        return "Крупность / размер частиц"
+    if any(unit in value_l for unit in ("мм", "mm")):
+        if _contains_any(context_l, ("крупн", "частиц", "зерн", "сито", "mesh", "particle", "size", "class")):
+            return "Крупность / размер частиц"
+        return "Размер / геометрия"
+    if any(unit in value_l for unit in ("т/ч", "t/h", "tph")):
+        return "Производительность / поток"
+    if "ppm" in value_l:
+        return "Концентрация / ppm"
+    if any(unit in value_l for unit in ("°c", "°с", "℃")):
+        return "Температура"
+    if "%" in value_l:
+        if _contains_any(context_l, ("извлеч", "recovery", "yield", "выход")):
+            return "Извлечение / выход"
+        if _contains_any(context_l, ("содерж", "grade", "массов", "доля", "концентрат")):
+            return "Содержание / массовая доля"
+        if _contains_any(context_l, ("влажн", "moisture")):
+            return "Влажность"
+        return "Процентный показатель"
+    return None
+
+
+def _clean_parameter_value(value: str) -> str:
+    text = " ".join(str(value or "").replace(",", ".").split()).strip()
+    replacements = (
+        (r"(?i)^рН", "pH"),
+        (r"(?i)\bum\b", "мкм"),
+        (r"µm|μm", "мкм"),
+        (r"(?i)\bmm\b", "мм"),
+        (r"(?i)\bkg/t\b", "кг/т"),
+        (r"(?i)\bg/t\b", "г/т"),
+        (r"(?i)\bt/h\b|\btph\b", "т/ч"),
+    )
+    for pattern, replacement in replacements:
+        text = re.sub(pattern, replacement, text)
+    return text
+
+
+def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
+    return any(needle in text for needle in needles)

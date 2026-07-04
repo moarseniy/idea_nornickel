@@ -7,7 +7,7 @@ import re
 from typing import Any
 
 from app.config import Settings
-from app.knowledge import edge_id, score_hypothesis, stable_id
+from app.knowledge import edge_id, is_low_signal_numeric_label, score_hypothesis, stable_id
 
 
 class OpenAIServiceError(RuntimeError):
@@ -130,11 +130,13 @@ class OpenAIService:
 Источник: {source_name}
 
 Извлеки из текста компактный граф знаний для исследовательской системы. Нужны только предметные сущности:
-материалы, процессы, реагенты, свойства, метрики, оборудование, риски, наблюдения.
+материалы, процессы, реагенты, свойства, метрики, группы параметров, оборудование, риски, наблюдения.
+Не создавай отдельные узлы, label которых состоит только из числа и единицы измерения: "1 мм", "50 г/т", "465 мм".
+Если численные значения важны, объединяй их в узел type=parameter с предметным названием: "Крупность / размер частиц", "Расход реагента / дозировка", "pH / кислотность".
 
 Верни JSON:
 {{
-  "nodes": [{{"label": "...", "type": "material|process|reagent|property|metric|equipment|risk|observation", "summary": "..."}}],
+  "nodes": [{{"label": "...", "type": "material|process|reagent|property|metric|parameter|equipment|risk|observation", "summary": "..."}}],
   "edges": [{{"source": "label узла", "target": "label узла", "relation": "influences|used_in|processed_by|measured_by|constrained_by|associated_with", "evidence": "короткий фрагмент", "confidence": 0.0}}]
 }}
 
@@ -159,6 +161,8 @@ class OpenAIService:
                 label = str(raw.get("label") or "").strip()
                 kind = str(raw.get("type") or "concept").strip().lower()
                 if not label:
+                    continue
+                if is_low_signal_numeric_label(label):
                     continue
                 nid = stable_id(kind, label)
                 label_to_id[label.lower()] = nid
