@@ -3,6 +3,9 @@ const state = {
   projectId: null,
   state: null,
   weights: { novelty: 0.25, feasibility: 0.25, impact: 0.35, risk: 0.15 },
+  openHypothesisId: null,
+  dockTab: "docs",
+  graphKey: "",
 };
 
 const graphView = {
@@ -27,6 +30,7 @@ document.addEventListener("DOMContentLoaded", init);
 
 async function init() {
   $("#actorInput").value = localStorage.getItem("hl.actor") || "researcher";
+  renderActorBadge();
   bindEvents();
   await refreshProjects();
 }
@@ -34,6 +38,7 @@ async function init() {
 function bindEvents() {
   $("#actorInput").addEventListener("input", (event) => {
     localStorage.setItem("hl.actor", event.target.value.trim() || "researcher");
+    renderActorBadge();
   });
 
   $("#projectSelect").addEventListener("change", async (event) => {
@@ -51,16 +56,26 @@ function bindEvents() {
   $("#exportJsonBtn").addEventListener("click", () => openExport("json"));
   $("#exportCsvBtn").addEventListener("click", () => openExport("csv"));
   $("#chatForm").addEventListener("submit", sendChat);
-  $("#graphZoomOut").addEventListener("click", () => zoomGraph(0.82));
-  $("#graphZoomIn").addEventListener("click", () => zoomGraph(1.22));
-  $("#graphFit").addEventListener("click", () => fitGraphToViewport(true));
+  $("#graphZoomOut")?.addEventListener("click", () => zoomGraph(0.82));
+  $("#graphZoomIn")?.addEventListener("click", () => zoomGraph(1.22));
+  $("#graphFit")?.addEventListener("click", () => fitGraphToViewport(true));
 
   const graphSvg = $("#graphSvg");
-  graphSvg.addEventListener("wheel", onGraphWheel, { passive: false });
-  graphSvg.addEventListener("pointerdown", onGraphPointerDown);
-  graphSvg.addEventListener("pointermove", onGraphPointerMove);
-  graphSvg.addEventListener("pointerup", onGraphPointerUp);
-  graphSvg.addEventListener("pointercancel", onGraphPointerUp);
+  if (graphSvg) {
+    graphSvg.addEventListener("wheel", onGraphWheel, { passive: false });
+    graphSvg.addEventListener("pointerdown", onGraphPointerDown);
+    graphSvg.addEventListener("pointermove", onGraphPointerMove);
+    graphSvg.addEventListener("pointerup", onGraphPointerUp);
+    graphSvg.addEventListener("pointercancel", onGraphPointerUp);
+  }
+
+  $("#knowledgeGraph")?.addEventListener("nodeselect", (event) => {
+    openHypothesisByGraphNode(event.detail?.id);
+  });
+
+  $$("[data-dock-tab]").forEach((button) => {
+    button.addEventListener("click", () => setDockTab(button.dataset.dockTab));
+  });
 
   window.addEventListener("resize", () => {
     clearTimeout(window.__graphResizeTimer);
@@ -75,9 +90,26 @@ function bindEvents() {
   });
 
   $("#hypothesesList").addEventListener("click", async (event) => {
+    const graphButton = event.target.closest("[data-focus-node], [data-path-node]");
+    if (graphButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      const nodeId = graphButton.dataset.focusNode || graphButton.dataset.pathNode;
+      if (graphButton.dataset.pathNode) pathGraphNode(nodeId);
+      else focusGraphNode(nodeId);
+      return;
+    }
+
     const button = event.target.closest("[data-status]");
-    if (!button) return;
-    await updateStatus(button.dataset.id, button.dataset.status);
+    if (button) {
+      await updateStatus(button.dataset.id, button.dataset.status);
+      return;
+    }
+
+    const card = event.target.closest(".hypothesis-card[data-hypothesis-id]");
+    if (!card || event.target.closest("button, input, textarea, select, form")) return;
+    state.openHypothesisId = state.openHypothesisId === card.dataset.hypothesisId ? null : card.dataset.hypothesisId;
+    renderHypotheses();
   });
 
   $("#hypothesesList").addEventListener("submit", async (event) => {
@@ -310,7 +342,51 @@ function renderAll() {
   renderHypotheses();
   renderEvents();
   renderChat();
+  renderDockState();
   drawGraph();
+}
+
+function renderDockState() {
+  $$("[data-dock-tab]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.dockTab === state.dockTab);
+  });
+  $$("[data-dock-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.dockPanel !== state.dockTab;
+  });
+}
+
+function setDockTab(tab) {
+  state.dockTab = tab || "docs";
+  renderDockState();
+}
+
+function renderActorBadge() {
+  const actorName = actor();
+  const badge = $("#actorBadge");
+  if (badge) badge.textContent = actorName.slice(0, 1).toUpperCase() || "R";
+}
+
+function focusGraphNode(nodeId) {
+  const graph = $("#knowledgeGraph");
+  if (graph && typeof graph.focusNode === "function") graph.focusNode(nodeId);
+}
+
+function pathGraphNode(nodeId) {
+  const graph = $("#knowledgeGraph");
+  if (!graph) return;
+  if (typeof graph.highlightPath === "function") graph.highlightPath(nodeId);
+  else if (typeof graph.focusNode === "function") graph.focusNode(nodeId);
+}
+
+function openHypothesisByGraphNode(nodeId) {
+  if (!String(nodeId || "").startsWith("hypothesis:")) return;
+  const hypothesisId = String(nodeId).slice("hypothesis:".length);
+  if (!state.state?.hypotheses?.some((item) => item.id === hypothesisId)) return;
+  state.openHypothesisId = hypothesisId;
+  renderHypotheses();
+  requestAnimationFrame(() => {
+    $(`.hypothesis-card[data-hypothesis-id="${cssEscape(hypothesisId)}"]`)?.scrollIntoView({ block: "nearest" });
+  });
 }
 
 function renderProjectSelect() {
@@ -360,8 +436,11 @@ function renderDocuments() {
     ? docs
         .map(
           (doc) => `<div class="doc-row">
-            <b>${escapeHtml(doc.filename)}</b>
-            <span>${escapeHtml(doc.content_type)} · ${doc.metadata?.chars || 0} знаков</span>
+            <span class="doc-type">${escapeHtml(fileType(doc.filename, doc.content_type))}</span>
+            <div class="doc-main">
+              <b title="${escapeHtml(doc.filename)}">${escapeHtml(doc.filename)}</b>
+              <span>${Number(doc.metadata?.chars || 0).toLocaleString("ru-RU")} знаков</span>
+            </div>
           </div>`,
         )
         .join("")
@@ -372,13 +451,19 @@ function renderHypotheses() {
   const hypotheses = state.state?.hypotheses || [];
   const list = $("#hypothesesList");
   if (!hypotheses.length) {
+    state.openHypothesisId = null;
     list.innerHTML = `<div class="empty">Гипотез пока нет</div>`;
     return;
+  }
+  if (!hypotheses.some((item) => item.id === state.openHypothesisId)) {
+    state.openHypothesisId = hypotheses[0].id;
   }
   list.innerHTML = hypotheses.map(renderHypothesis).join("");
 }
 
 function renderHypothesis(item) {
+  const isOpen = item.id === state.openHypothesisId;
+  const graphNode = `hypothesis:${item.id}`;
   const metrics = [
     ["Новизна", item.novelty],
     ["Реализ.", item.feasibility],
@@ -400,49 +485,67 @@ function renderHypothesis(item) {
     ["confirmed", "Да"],
     ["rejected", "Нет"],
   ];
-  return `<article class="hypothesis-card ${escapeHtml(item.status)}">
+  const statusLabel = statuses.find(([status]) => status === item.status)?.[1] || "Черновик";
+  return `<article class="hypothesis-card ${escapeHtml(item.status)} ${isOpen ? "open" : ""}" data-hypothesis-id="${escapeHtml(item.id)}">
     <div class="hypothesis-title">
-      <h3>${escapeHtml(item.title)}</h3>
-      <div class="score">${Number(item.score || 0).toFixed(1)}</div>
+      <div>
+        <span class="status-label">${escapeHtml(statusLabel)}</span>
+        <h3>${escapeHtml(item.title)}</h3>
+      </div>
+      <div class="score">${displayScore(item)}<span>score</span></div>
     </div>
     <div class="statement">${escapeHtml(item.statement)}</div>
-    <div class="muted">${escapeHtml(item.mechanism || item.rationale || "")}</div>
     <div class="metrics">${metrics
-      .map(([label, value]) => `<div class="metric"><span>${label}</span><b>${Number(value || 0).toFixed(0)}</b></div>`)
+      .map(([label, value]) => `<div class="metric"><span>${label}</span><b>${displayMetric(value)}</b></div>`)
       .join("")}</div>
-    ${evidence ? `<div class="evidence">${evidence}</div>` : ""}
-    ${roadmap ? `<div class="roadmap">${roadmap}</div>` : ""}
-    <div class="status-row">${statuses
-      .map(
-        ([status, label]) =>
-          `<button type="button" class="${item.status === status ? "active" : ""}" data-id="${item.id}" data-status="${status}">${label}</button>`,
-      )
-      .join("")}</div>
-    <form class="feedback-form" data-id="${item.id}">
-      <select name="rating" aria-label="Оценка">
-        <option value="">Оценка</option>
-        <option value="5">5</option><option value="4">4</option><option value="3">3</option><option value="2">2</option><option value="1">1</option>
-      </select>
-      <select name="outcome" aria-label="Исход">
-        <option value="">Исход</option>
-        <option value="confirmed">Подтв.</option>
-        <option value="rejected">Опр.</option>
-        <option value="experiment">В опыт</option>
-      </select>
-      <textarea name="comment" rows="1" placeholder="Комментарий эксперта"></textarea>
-      <button type="submit">✓</button>
-    </form>
+    ${
+      isOpen
+        ? `<div class="hypothesis-extra">
+            <div class="muted">${escapeHtml(item.mechanism || item.rationale || "")}</div>
+            ${evidence ? `<div class="evidence">${evidence}</div>` : ""}
+            ${roadmap ? `<div class="roadmap">${roadmap}</div>` : ""}
+            <div class="graph-actions">
+              <button type="button" data-path-node="${escapeHtml(graphNode)}">Путь к KPI</button>
+              <button type="button" data-focus-node="${escapeHtml(graphNode)}">Фокус в графе</button>
+            </div>
+            <div class="status-row">${statuses
+              .map(
+                ([status, label]) =>
+                  `<button type="button" class="${item.status === status ? "active" : ""}" data-id="${item.id}" data-status="${status}">${label}</button>`,
+              )
+              .join("")}</div>
+            <form class="feedback-form" data-id="${item.id}">
+              <select name="rating" aria-label="Оценка">
+                <option value="">Оценка</option>
+                <option value="5">5</option><option value="4">4</option><option value="3">3</option><option value="2">2</option><option value="1">1</option>
+              </select>
+              <select name="outcome" aria-label="Исход">
+                <option value="">Исход</option>
+                <option value="confirmed">Подтв.</option>
+                <option value="rejected">Опр.</option>
+                <option value="experiment">В опыт</option>
+              </select>
+              <textarea name="comment" rows="1" placeholder="Комментарий эксперта"></textarea>
+              <button type="submit">✓</button>
+            </form>
+          </div>`
+        : ""
+    }
   </article>`;
 }
 
 function renderEvents() {
   const events = state.state?.events || [];
+  $("#versionCount").textContent = String(events[0]?.version_no || events.length || 0);
   $("#eventsList").innerHTML = events.length
     ? events
         .map(
           (event) => `<div class="event-row">
-            <b>v${event.version_no} · ${escapeHtml(event.action)}</b>
-            <span>${escapeHtml(event.actor)} · ${formatDate(event.created_at)}</span>
+            <span class="event-version">v${event.version_no}</span>
+            <div class="event-main">
+              <b>${escapeHtml(event.action)}</b>
+              <span>${escapeHtml(event.actor)} · ${formatDate(event.created_at)}</span>
+            </div>
           </div>`,
         )
         .join("")
@@ -465,9 +568,108 @@ function renderChat() {
   log.scrollTop = log.scrollHeight;
 }
 
+function prepareGraphData(rawGraph, hypotheses) {
+  const nodeById = new Map();
+  (rawGraph.nodes || []).forEach((node) => {
+    if (!node?.id) return;
+    nodeById.set(String(node.id), {
+      ...node,
+      id: String(node.id),
+      label: String(node.label || node.id),
+      type: String(node.type || "concept"),
+      summary: String(node.summary || ""),
+      weight: Number(node.weight || 1),
+    });
+  });
+
+  hypotheses.forEach((hypothesis) => {
+    const id = `hypothesis:${hypothesis.id}`;
+    if (!nodeById.has(id)) {
+      nodeById.set(id, {
+        id,
+        label: hypothesis.title || "Гипотеза",
+        type: "hypothesis",
+        summary: hypothesis.statement || "",
+        weight: 3,
+      });
+    }
+  });
+
+  const nodes = [...nodeById.values()].slice(0, 180);
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const edges = (rawGraph.edges || [])
+    .filter((edge) => nodeIds.has(String(edge.source)) && nodeIds.has(String(edge.target)))
+    .map((edge, index) => ({
+      ...edge,
+      id: String(edge.id || `edge:${index}`),
+      source: String(edge.source),
+      target: String(edge.target),
+      relation: String(edge.relation || "related_to"),
+      evidence: String(edge.evidence || ""),
+      weight: Number(edge.weight || 1),
+    }))
+    .slice(0, 360);
+
+  return { nodes, edges, kpi: chooseKpiNode(nodes) };
+}
+
+function chooseKpiNode(nodes) {
+  const candidates = nodes.filter((node) => ["property", "metric"].includes(node.type));
+  const preferred = candidates.find((node) => /извлеч|recovery|kpi|эффект|impact|yield/i.test(node.label));
+  return (preferred || candidates.sort((a, b) => Number(b.weight || 0) - Number(a.weight || 0))[0])?.id || null;
+}
+
+function graphDataKey(graph) {
+  return [
+    graph.kpi || "",
+    ...graph.nodes.map((node) => `${node.id}:${node.type}:${node.label}:${Number(node.weight || 0).toFixed(2)}`).sort(),
+    ...graph.edges.map((edge) => `${edge.id}:${edge.source}:${edge.target}:${edge.relation}:${Number(edge.weight || 0).toFixed(2)}`).sort(),
+  ].join("|");
+}
+
+function displayMetric(value) {
+  return Number(normalizeMetricForDisplay(value)).toFixed(0);
+}
+
+function displayScore(item) {
+  const values = [item.novelty, item.feasibility, item.impact, item.risk].map((value) => Number(value || 0));
+  const looksUnitScaled = values.some((value) => value > 0 && value <= 1) && values.every((value) => value <= 1);
+  if (!looksUnitScaled) return Number(item.score || 0).toFixed(1);
+  const novelty = normalizeMetricForDisplay(item.novelty);
+  const feasibility = normalizeMetricForDisplay(item.feasibility);
+  const impact = normalizeMetricForDisplay(item.impact);
+  const risk = normalizeMetricForDisplay(item.risk);
+  return (
+    novelty * Number(state.weights.novelty || 0) +
+    feasibility * Number(state.weights.feasibility || 0) +
+    impact * Number(state.weights.impact || 0) +
+    (100 - risk) * Number(state.weights.risk || 0)
+  ).toFixed(1);
+}
+
+function normalizeMetricForDisplay(value) {
+  const number = Number(value || 0);
+  return number > 0 && number <= 1 ? number * 100 : number;
+}
+
 function drawGraph() {
-  const graph = state.state?.graph || { nodes: [], edges: [] };
+  const graph = prepareGraphData(state.state?.graph || { nodes: [], edges: [] }, state.state?.hypotheses || []);
+  const statsText = `${graph.nodes.length} узлов · ${graph.edges.length} связей`;
+  $("#graphStats").textContent = statsText;
+  $("#dockGraphStats").textContent = statsText;
+
+  const engine = $("#knowledgeGraph");
+  if (engine) {
+    const key = graphDataKey(graph);
+    if (state.graphKey !== key && typeof engine.setData === "function") {
+      state.graphKey = key;
+      engine.setData(graph);
+    }
+    return;
+  }
+
   const svg = $("#graphSvg");
+  if (!svg) return;
   svg.innerHTML = "";
   const width = Math.max(360, svg.clientWidth || 720);
   const height = Math.max(260, svg.clientHeight || 360);
@@ -492,7 +694,7 @@ function drawGraph() {
     .filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target))
     .slice(0, 180)
     .map((edge, index) => ({ ...edge, index }));
-  $("#graphStats").textContent = `${graph.nodes.length} узлов · ${graph.edges.length} связей`;
+  $("#graphStats").textContent = statsText;
 
   if (!nodes.length) {
     graphView.key = "";
@@ -1100,6 +1302,17 @@ function escapeHtml(value) {
 function formatDate(value) {
   if (!value) return "";
   return new Date(value).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function fileType(filename, contentType) {
+  const extension = String(filename || "").split(".").pop();
+  if (extension && extension !== filename) return extension.slice(0, 6).toUpperCase();
+  return String(contentType || "file").split("/").pop().slice(0, 6).toUpperCase();
+}
+
+function cssEscape(value) {
+  if (window.CSS?.escape) return window.CSS.escape(value);
+  return String(value).replaceAll('"', '\\"').replaceAll("\\", "\\\\");
 }
 
 function trim(value, length) {
