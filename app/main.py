@@ -7,6 +7,7 @@ import logging
 import mimetypes
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
@@ -269,6 +270,23 @@ async def generate_hypotheses_with_files(
             )
         )
     return _generate_hypotheses_core(project_id, payload, _actor(x_user), prompt_documents=prompt_documents)
+
+
+@app.delete("/api/projects/{project_id}/hypotheses")
+def clear_hypotheses(
+    project_id: str,
+    x_user: str | None = Header(default=None, alias="X-User"),
+) -> dict[str, Any]:
+    _require_project(project_id)
+    result = db.clear_hypotheses(project_id, _actor(x_user))
+    logger.info(
+        "Hypotheses cleared: project_id=%s hypotheses=%s nodes=%s edges=%s",
+        project_id,
+        result.get("hypotheses"),
+        result.get("nodes"),
+        result.get("edges"),
+    )
+    return {"cleared": result, "state": project_state(project_id)}
 
 
 def _generate_hypotheses_core(
@@ -930,8 +948,18 @@ def _enrich_vision_images(parsed: Any, ocr_languages: list[str]) -> dict[str, An
 
     items: list[dict[str, Any]] = []
     vision_chunks: list[str] = []
-    for image in parsed.vision_images:
-        vision_text, vision_meta = ai.describe_image(image.data, image.label, image.content_type, ocr_languages=ocr_languages)
+
+    def _describe(image: Any) -> tuple[str, dict[str, Any]]:
+        return ai.describe_image(image.data, image.label, image.content_type, ocr_languages=ocr_languages)
+
+    max_workers = max(1, min(settings.vision_max_workers, len(parsed.vision_images)))
+    if max_workers > 1:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(_describe, parsed.vision_images))
+    else:
+        results = [_describe(image) for image in parsed.vision_images]
+
+    for image, (vision_text, vision_meta) in zip(parsed.vision_images, results):
         item_meta = {
             "label": image.label,
             "reason": image.reason,

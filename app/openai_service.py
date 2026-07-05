@@ -282,6 +282,11 @@ class OpenAIService:
         prompt = _build_chat_prompt(project, hypotheses, graph, feedback, chat_history, message, self.settings.max_context_chars)
         instructions = (
             "Ты интерактивный научный ассистент проекта. Отвечай по-русски, кратко, предметно. "
+            "Единственный источник правды о существующих гипотезах — блок «Гипотезы проекта» во входных данных. "
+            "Он отражает актуальное состояние и имеет приоритет над всем, что упоминалось в истории чата ранее. "
+            "Не выдумывай гипотезы, не восстанавливай их из прошлых сообщений и не выдавай узлы графа или идеи из документов за существующие гипотезы. "
+            "Если в блоке указано, что гипотез нет, честно сообщи, что в проекте пока нет ни одной гипотезы, "
+            "и предложи запустить генерацию — но не перечисляй никаких гипотез. "
             "Если эксперт корректирует систему, явно сформулируй, как это должно повлиять на следующие гипотезы, критерии или граф знаний. "
             "Не притворяйся, что провел лабораторные опыты."
         )
@@ -357,6 +362,8 @@ class OpenAIService:
         kwargs: dict[str, Any] = {
             "api_key": self.settings.openai_api_key,
             "base_url": self.settings.openai_base_url or "https://api.openai.com/v1",
+            "timeout": self.settings.openai_timeout,
+            "max_retries": self.settings.openai_max_retries,
         }
         client = OpenAI(**kwargs)
         request: dict[str, Any] = {
@@ -586,18 +593,23 @@ def _build_chat_prompt(
     message: str,
     max_chars: int,
 ) -> str:
-    top_hypotheses = "\n".join(
-        f"- #{idx}: {item.get('title')} | score={item.get('score')} | status={item.get('status')}\n  {item.get('statement')}"
-        for idx, item in enumerate(hypotheses[:8], start=1)
-    )
+    total_hypotheses = len(hypotheses)
+    if total_hypotheses:
+        top_hypotheses = "\n".join(
+            f"- #{idx}: {item.get('title')} | score={item.get('score')} | status={item.get('status')}\n  {item.get('statement')}"
+            for idx, item in enumerate(hypotheses[:8], start=1)
+        )
+        hypotheses_block = f"Всего гипотез в системе: {total_hypotheses}.\n{top_hypotheses}"
+    else:
+        hypotheses_block = "СПИСОК ПУСТ: в проекте сейчас 0 гипотез. Никаких существующих гипотез перечислять нельзя."
     history = "\n".join(f"{item.get('role')}({item.get('actor')}): {item.get('content')}" for item in chat_history[-10:])
     return f"""
 Проект: {project.get("name")}
 Цель: {project.get("goal") or "не задано"}
 Ограничения: {project.get("constraints") or "не заданы"}
 
-Топ гипотез:
-{top_hypotheses or "пока нет гипотез"}
+Гипотезы проекта (единственный источник правды, актуальное состояние):
+{hypotheses_block}
 
 Граф:
 {_graph_context(graph)}

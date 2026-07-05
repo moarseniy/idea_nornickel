@@ -502,6 +502,63 @@ class Database:
             row = conn.execute("SELECT * FROM hypotheses WHERE id=?", (hypothesis_id,)).fetchone()
         return self._hypothesis_from_row(row) if row else None
 
+    def clear_hypotheses(self, project_id: str, actor: str) -> dict[str, int]:
+        """Delete all hypotheses of a project and roll back their contribution to the graph.
+
+        Nodes/edges whose only source is a hypothesis are removed; those also backed by a
+        document keep their remaining sources so the graph returns to its pre-generation state.
+        """
+        removed_nodes = 0
+        removed_edges = 0
+        with self.connect() as conn:
+            hyp_ids = {
+                str(row["id"])
+                for row in conn.execute("SELECT id FROM hypotheses WHERE project_id=?", (project_id,)).fetchall()
+            }
+            if not hyp_ids:
+                return {"hypotheses": 0, "nodes": 0, "edges": 0}
+
+            now = utcnow()
+            for table, id_column in (("knowledge_nodes", "node_id"), ("knowledge_edges", "edge_id")):
+                rows = conn.execute(
+                    f"SELECT {id_column} AS entity_id, source_ids_json FROM {table} WHERE project_id=?",
+                    (project_id,),
+                ).fetchall()
+                for row in rows:
+                    source_ids = [str(item) for item in json_loads(row["source_ids_json"], []) if item]
+                    remaining = [source for source in source_ids if source not in hyp_ids]
+                    if len(remaining) == len(source_ids):
+                        continue
+                    if remaining:
+                        conn.execute(
+                            f"UPDATE {table} SET source_ids_json=?, updated_at=? WHERE project_id=? AND {id_column}=?",
+                            (json_dumps(sorted(set(remaining))), now, project_id, row["entity_id"]),
+                        )
+                    else:
+                        conn.execute(
+                            f"DELETE FROM {table} WHERE project_id=? AND {id_column}=?",
+                            (project_id, row["entity_id"]),
+                        )
+                        if table == "knowledge_nodes":
+                            removed_nodes += 1
+                        else:
+                            removed_edges += 1
+
+            removed_hypotheses = conn.execute(
+                "DELETE FROM hypotheses WHERE project_id=?", (project_id,)
+            ).rowcount
+            conn.execute("UPDATE projects SET updated_at=? WHERE id=?", (now, project_id))
+            self._add_event_conn(
+                conn,
+                project_id,
+                actor,
+                "hypotheses.cleared",
+                "hypothesis",
+                None,
+                {"hypotheses": removed_hypotheses, "nodes": removed_nodes, "edges": removed_edges},
+            )
+        return {"hypotheses": removed_hypotheses, "nodes": removed_nodes, "edges": removed_edges}
+
     def update_hypothesis_status(self, project_id: str, hypothesis_id: str, status: str, actor: str) -> dict[str, Any] | None:
         now = utcnow()
         with self.connect() as conn:

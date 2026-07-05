@@ -20,6 +20,15 @@ def _as_int(value: str | None, default: int) -> int:
         return default
 
 
+def _as_float(value: str | None, default: float) -> float:
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
 def _normalize_base_url(value: str | None) -> str | None:
     if not value or not value.strip():
         return None
@@ -42,6 +51,9 @@ class Settings:
     openai_graph_extraction: bool
     openai_research_model: str
     openai_research_max_sources: int
+    openai_max_retries: int
+    openai_timeout: float
+    vision_max_workers: int
     log_level: str
     max_document_chars: int
     max_context_chars: int
@@ -85,6 +97,9 @@ def load_settings() -> Settings:
         openai_graph_extraction=_as_bool(os.getenv("OPENAI_GRAPH_EXTRACTION"), True),
         openai_research_model=(os.getenv("OPENAI_RESEARCH_MODEL") or os.getenv("OPENAI_MODEL", "gpt-5.2")).strip() or "gpt-5.2",
         openai_research_max_sources=_as_int(os.getenv("OPENAI_RESEARCH_MAX_SOURCES"), 8),
+        openai_max_retries=max(0, _as_int(os.getenv("OPENAI_MAX_RETRIES"), 5)),
+        openai_timeout=max(1.0, _as_float(os.getenv("OPENAI_TIMEOUT"), 300.0)),
+        vision_max_workers=max(1, _as_int(os.getenv("VISION_MAX_WORKERS"), 4)),
         log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO",
         max_document_chars=_as_int(os.getenv("MAX_DOCUMENT_CHARS"), 120_000),
         max_context_chars=_as_int(os.getenv("MAX_CONTEXT_CHARS"), 28_000),

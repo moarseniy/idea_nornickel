@@ -58,11 +58,23 @@ function bindEvents() {
   $("#fileInput").addEventListener("change", uploadFiles);
   $("#promptFilesBtn").addEventListener("click", () => $("#promptFileInput").click());
   $("#promptFileInput").addEventListener("change", selectPromptFiles);
-  $("#generateBtn").addEventListener("click", generateHypotheses);
+  $("#generateBtn").addEventListener("click", (event) => {
+    if (event.currentTarget.dataset.mode === "clear") {
+      clearHypotheses();
+    } else {
+      generateHypotheses();
+    }
+  });
   $("#exportCsvBtn").addEventListener("click", () => openExport("csv"));
   $("#exportMdBtn").addEventListener("click", () => openExport("md"));
   $("#exportPdfBtn").addEventListener("click", () => openExport("pdf"));
   $("#chatForm").addEventListener("submit", sendChat);
+  $("#chatInput").addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      $("#chatForm").requestSubmit();
+    }
+  });
   $("#graphZoomOut")?.addEventListener("click", () => zoomGraph(0.82));
   $("#graphZoomIn")?.addEventListener("click", () => zoomGraph(1.22));
   $("#graphFit")?.addEventListener("click", () => fitGraphToViewport(true));
@@ -384,6 +396,23 @@ async function generateHypotheses() {
   }
 }
 
+async function clearHypotheses() {
+  if (!state.projectId) return;
+  if (!confirm("Удалить все сгенерированные гипотезы и вернуть граф к исходному состоянию?")) return;
+  setBusy({ label: "Очистка гипотез", progress: 40 });
+  try {
+    const payload = await api(`/api/projects/${state.projectId}/hypotheses`, { method: "DELETE" });
+    state.state = payload.state;
+    state.openHypothesisId = null;
+    renderAll();
+    toast("Гипотезы очищены");
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
 async function generateWithPromptFiles(requestPayload, stages = []) {
   const form = new FormData();
   form.append("payload_json", JSON.stringify(requestPayload));
@@ -523,11 +552,27 @@ function renderAll() {
   renderRuntime();
   renderDocuments();
   renderHypotheses();
+  renderGenerateButton();
   renderEvents();
   renderChat();
   renderDockState();
   renderSettingsTabs();
   drawGraph();
+}
+
+function renderGenerateButton() {
+  const button = $("#generateBtn");
+  if (!button) return;
+  const hasHypotheses = Boolean(state.state?.hypotheses?.length);
+  if (hasHypotheses) {
+    button.dataset.mode = "clear";
+    button.title = "Удалить гипотезы и вернуть граф к исходному состоянию";
+    button.innerHTML = "<span>🗑</span><b>Очистить гипотезы</b>";
+  } else {
+    button.dataset.mode = "generate";
+    button.title = "Сгенерировать гипотезы";
+    button.innerHTML = "<span>✦</span><b>Генерация</b>";
+  }
 }
 
 function renderDockState() {
@@ -888,7 +933,11 @@ function renderChat() {
         .map(
           (message) => `<div class="message ${escapeHtml(message.role)}">
             <strong>${escapeHtml(message.actor)} · ${formatDate(message.created_at)}</strong>
-            ${escapeHtml(message.content)}
+            <div class="message-body">${
+              message.role === "assistant"
+                ? renderMarkdown(message.content)
+                : escapeHtml(message.content).replaceAll("\n", "<br>")
+            }</div>
           </div>`,
         )
         .join("")
@@ -1725,6 +1774,95 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function renderMarkdown(src) {
+  const raw = String(src ?? "");
+  const placeholders = [];
+  const stash = (htmlValue) => {
+    placeholders.push(htmlValue);
+    return `\x00${placeholders.length - 1}\x00`;
+  };
+
+  // Fenced code blocks first, so their content is not further processed.
+  let work = raw.replace(/```[^\n]*\n?([\s\S]*?)```/g, (_, code) =>
+    stash(`<pre class="md-pre"><code>${escapeHtml(code.replace(/\n$/, ""))}</code></pre>`),
+  );
+
+  work = escapeHtml(work);
+
+  // Inline code.
+  work = work.replace(/`([^`\n]+)`/g, (_, code) => stash(`<code class="md-code">${code}</code>`));
+  // Links [text](url).
+  work = work.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (match, label, url) => {
+    const safe = safeExternalUrl(url);
+    return safe ? `<a href="${safe}" target="_blank" rel="noopener noreferrer">${label}</a>` : match;
+  });
+  // Bold and italic.
+  work = work.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  work = work.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+  work = work.replace(/(^|[^\w])_([^_\n]+)_/g, "$1<em>$2</em>");
+
+  // Block-level assembly.
+  const lines = work.split("\n");
+  const out = [];
+  let listType = null;
+  let paragraph = [];
+  const flushParagraph = () => {
+    if (paragraph.length) {
+      out.push(`<p>${paragraph.join("<br>")}</p>`);
+      paragraph = [];
+    }
+  };
+  const closeList = () => {
+    if (listType) {
+      out.push(`</${listType}>`);
+      listType = null;
+    }
+  };
+  for (const line of lines) {
+    if (/^\s*$/.test(line)) {
+      flushParagraph();
+      closeList();
+      continue;
+    }
+    let match;
+    if ((match = line.match(/^\s*(#{1,6})\s+(.*)$/))) {
+      flushParagraph();
+      closeList();
+      const level = match[1].length;
+      out.push(`<h${level} class="md-h">${match[2].trim()}</h${level}>`);
+    } else if ((match = line.match(/^\s*(?:[-*+])\s+(.*)$/))) {
+      flushParagraph();
+      if (listType !== "ul") {
+        closeList();
+        out.push('<ul class="md-list">');
+        listType = "ul";
+      }
+      out.push(`<li>${match[1].trim()}</li>`);
+    } else if ((match = line.match(/^\s*\d+[.)]\s+(.*)$/))) {
+      flushParagraph();
+      if (listType !== "ol") {
+        closeList();
+        out.push('<ol class="md-list">');
+        listType = "ol";
+      }
+      out.push(`<li>${match[1].trim()}</li>`);
+    } else if (/^\s*(?:---+|\*\*\*+|___+)\s*$/.test(line)) {
+      flushParagraph();
+      closeList();
+      out.push('<hr class="md-hr">');
+    } else {
+      closeList();
+      paragraph.push(line.trim());
+    }
+  }
+  flushParagraph();
+  closeList();
+
+  let html = out.join("");
+  html = html.replace(/\x00(\d+)\x00/g, (_, index) => placeholders[Number(index)] ?? "");
+  return html;
 }
 
 function safeExternalUrl(value) {
