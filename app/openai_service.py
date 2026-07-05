@@ -94,15 +94,29 @@ class OpenAIService:
             "Отделяй подтвержденные сведения от инженерных допущений."
         )
         try:
-            response = self._call_response(
-                instructions=instructions,
-                input_payload=prompt,
-                max_output_tokens=4500,
-                model=self.settings.openai_research_model,
-                tools=[{"type": "web_search"}],
-                tool_choice="required",
-                include=["web_search_call.action.sources"],
-            )
+            if self._is_openai_endpoint():
+                # Native OpenAI: hosted web_search tool + source annotations.
+                response = self._call_response(
+                    instructions=instructions,
+                    input_payload=prompt,
+                    max_output_tokens=4500,
+                    model=self.settings.openai_research_model,
+                    tools=[{"type": "web_search"}],
+                    tool_choice="required",
+                    include=["web_search_call.action.sources"],
+                )
+                mode = "openai_web_search"
+            else:
+                # OpenAI-compatible provider (OpenRouter, ...): use the "web" plugin
+                # instead of the OpenAI-only hosted tool. Citations arrive as url_citation annotations.
+                response = self._call_response(
+                    instructions=instructions,
+                    input_payload=prompt,
+                    max_output_tokens=4500,
+                    model=self.settings.openai_research_model,
+                    extra_body={"plugins": [{"id": "web", "max_results": source_limit}]},
+                )
+                mode = "openrouter_web_search"
             text = (getattr(response, "output_text", None) or _response_to_text(response)).strip()
             if not text:
                 raise ValueError("OpenAI research returned empty text")
@@ -114,7 +128,7 @@ class OpenAIService:
                     "sources": sources,
                 },
                 {
-                    "mode": "openai_web_search",
+                    "mode": mode,
                     "model": self.settings.openai_research_model,
                     "sources": len(sources),
                 },
@@ -346,6 +360,15 @@ class OpenAIService:
             return str(output_text)
         return _response_to_text(response)
 
+    def _is_openai_endpoint(self) -> bool:
+        """True for the native OpenAI API (no base_url override or api.openai.com).
+
+        OpenAI-only features (hosted web_search tool, its include options) are gated on this;
+        other OpenAI-compatible providers (OpenRouter, ...) take a compatible code path.
+        """
+        base = (self.settings.openai_base_url or "").lower()
+        return not base or "api.openai.com" in base
+
     def _call_response(
         self,
         instructions: str,
@@ -356,6 +379,7 @@ class OpenAIService:
         tool_choice: str | dict[str, Any] | None = None,
         include: list[str] | None = None,
         text_format: dict[str, Any] | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> Any:
         from openai import OpenAI
 
@@ -380,6 +404,8 @@ class OpenAIService:
             request["include"] = include
         if text_format:
             request["text"] = {"format": text_format}
+        if extra_body:
+            request["extra_body"] = extra_body
         return client.responses.create(**request)
 
 
